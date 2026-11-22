@@ -50,7 +50,7 @@ dist: check test
 	@cd build && zip -q -r "../$(DIST)" karako.koplugin
 	@rm -rf build
 	@echo "built $(DIST):"
-	@unzip -l "$(DIST)" | tail -n +4 | head -n -2 | awk '{print "  " $$4}'
+	@unzip -Z1 "$(DIST)" | sed 's/^/  /'
 
 # Guards a release against a tag that disagrees with _meta.lua. The version the
 # plugin logs is how a stale install gets spotted, so it has to be true.

@@ -216,6 +216,7 @@ end
 --   scope_id  list or tag ID, when scope is not "all"
 --   limit     page size
 --   cursor    pagination cursor from a previous call
+--   only_favourited  restrict to bookmarked-as-favourite articles
 -- @treturn bool ok
 -- @treturn table|string { bookmarks = {...}, nextCursor = ... } or an error code.
 function KarakeepApi:getBookmarkPage(opts)
@@ -238,6 +239,9 @@ function KarakeepApi:getBookmarkPage(opts)
         -- Only the unfiltered endpoint can exclude archived bookmarks
         -- server-side; list and tag results are filtered by the caller.
         query.archived = false
+        if opts.only_favourited then
+            query.favourited = true
+        end
     end
 
     return self:call("GET", path, { query = query })
@@ -314,6 +318,23 @@ end
 --- Update mutable bookmark fields, e.g. { archived = true }.
 function KarakeepApi:updateBookmark(id, fields)
     return self:call("PATCH", "/bookmarks/" .. id, { body = fields })
+end
+
+--- Delete a bookmark, which drops it out of every later sync scope.
+--
+-- The destructive counterpart to archiving: with this the article is gone from
+-- Karakeep entirely, rather than moved out of the unread list.
+function KarakeepApi:deleteBookmark(id)
+    return self:call("DELETE", "/bookmarks/" .. id, { quiet = true })
+end
+
+--- Add a bookmark by URL, the way Karakeep's own browser extension does.
+--
+-- @tparam string url
+-- @treturn bool ok
+-- @treturn table|string The created bookmark, or an error code.
+function KarakeepApi:createBookmark(url)
+    return self:call("POST", "/bookmarks", { body = { type = "link", url = url } })
 end
 
 --- Attach tags by name, creating them if they do not exist.

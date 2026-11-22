@@ -24,6 +24,19 @@ local COLOR_MAP = {
     gray = "yellow",
 }
 
+--- Whether highlights from this file can be matched to a Karakeep article.
+--
+-- Offsets only mean anything for the EPUBs this plugin builds. A PDF's
+-- annotations anchor into pages, which Karakeep has no offsets into, so pushing
+-- them would send the text with a "0,0" position at best; they are skipped
+-- instead, and the log says why once per file.
+--
+-- @tparam string path Local path of a downloaded article.
+-- @treturn bool
+function Highlights.supports(path)
+    return type(path) == "string" and path:lower():match("%.epub$") ~= nil
+end
+
 --- Read the highlights out of a document's sidecar.
 --
 -- Page bookmarks (annotations with no `drawer`) are not highlights and are
