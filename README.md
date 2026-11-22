@@ -1,22 +1,51 @@
+<p align="center">
+  <img src="docs/logo.svg" width="120" height="120" alt="KaraKo">
+</p>
+
+<h1 align="center">KaraKo</h1>
+
+<p align="center">
+  <b>Your Karakeep reading list, offline on a Kobo.</b><br>
+  Articles rebuilt as EPUBs, uploaded PDFs saved untouched, read status and highlights back to the server.
+</p>
+
+<p align="center">
+  <a href="https://github.com/shrirambalaji/karaoke/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/shrirambalaji/karaoke?label=release&color=d2743a"></a>
+  <a href="#licence"><img alt="Licence" src="https://img.shields.io/github/license/shrirambalaji/karaoke?color=202b38"></a>
+  <img alt="KOReader" src="https://img.shields.io/badge/KOReader-2024.04%2B-2f6f4f">
+  <img alt="Devices" src="https://img.shields.io/badge/kobo-e--ink%20readers-4b5563">
+</p>
+
+> [!NOTE]
+> **This is a fork of [`davepwsmith/KaraKo`](https://github.com/davepwsmith/KaraKo),**
+> maintained at [`shrirambalaji/karaoke`](https://github.com/shrirambalaji/karaoke).
+>
+> Upstream KaraKo syncs articles and nothing else. This fork keeps all of that
+> and adds **the features `wallabag.koplugin` has that KaraKo did not**, plus
+> **uploaded PDFs and images saved as they are** rather than skipped. Releases
+> on this repository are the source of truth for the fork — see
+> [what this fork adds](#what-this-fork-adds-over-upstream).
+
 > [!CAUTION]
-> This plugin is vibe-coded with Claude Code. I have done my best to review the
-> output and believe it to be reasonable, and have tested on a Kobo reader - but
-> treat it with the caution that anything vibe-coded deserves!
+> The plugin this started from is vibe-coded with Claude Code, and the additions
+> in this fork are in the same spirit. Everything here passes `make check`,
+> `make test` and a build of the installable zip, and the paths that only a real
+> device can exercise are listed in [TESTING.md](TESTING.md). Treat it with the
+> caution that anything vibe-coded deserves.
 
-# KaraKo
+## Why this exists
 
-Read your [Karakeep](https://karakeep.app) articles on a Kobo, via
-[KOReader](https://koreader.rocks).
+Read your [Karakeep](https://karakeep.app) library on a Kobo, via
+[KOReader](https://koreader.rocks) — the way `wallabag.koplugin` already lets
+people read their Wallabag library there.
 
 `karako.koplugin` syncs unread bookmarks onto the device as EPUBs, saves uploaded
 PDFs and images as they are, and pushes your read status and highlights back to
 Karakeep when you are done with them.
 
 It is modelled on KOReader's [`wallabag.koplugin`][wallabag], which solves the
-same problem for a different read-it-later service. This fork
-([`shrirambalaji/karaoke`](https://github.com/shrirambalaji/karaoke)) carries
-wallabag's remaining features across, and is the source of truth for the
-releases below.
+same problem for a different read-it-later service; this fork closes the gap
+between the two.
 
 [wallabag]: https://github.com/koreader/koreader/tree/master/plugins/wallabag.koplugin
 
@@ -58,6 +87,57 @@ re-fetched through the crawler, and never summarised. It is the bytes the user
 put into Karakeep, written to the device with the same
 `Article Title [kk-id_…]` name an article gets, so read status, archiving and
 local-copy bookkeeping work identically for both.
+
+### PDFs and other uploaded files
+
+A bookmark whose content is an uploaded file — a PDF, a scan, a saved image — is
+fetched from `GET /assets/{id}` and written to the download folder unchanged:
+
+```
+The Rustonomicon [kk-id_9f3a1c].pdf
+```
+
+What that gives you, because the file keeps the same marker every other download
+has:
+
+- **Read status works.** Finishing a PDF archives it in Karakeep like any
+  article, and the `.sdr` sidecar records your page in the usual way.
+- **Archiving, tagging and the local-copy rules apply** without a special case —
+  including "never delete something you have opened", and an archive folder if
+  you set one.
+- **Rebuild re-fetches it in place** rather than orphaning it under a new name.
+
+The format is resolved from the asset's type, then its MIME type, then its file
+name, and anything KOReader has no provider for is skipped deliberately rather
+than saved as a file that cannot be opened. Size is capped by `max_original_mb`
+(default 80) rather than `max_archive_mb`, because a PDF is routinely larger than
+a page archive.
+
+**Highlights are not sent for PDFs.** Karakeep stores offsets into its own
+rendered text, and a PDF annotation anchors into a page; there is nothing to
+match, so highlighting a PDF stays local instead of arriving on the server
+misplaced.
+
+### Adding articles from the reader
+
+**KaraKo → Add an article** takes a link and saves it to Karakeep without
+touching a phone. Offline, the link is queued in `karako_queue.lua` and sent by
+the next sync — at the *start* of the sync, so a link added a minute ago can be
+downloaded in the same run. Both adding and flushing the queue are bindable as
+gestures (**Settings → Gestures**), as `karako_add` and `karako_upload_queue`.
+
+### Archiving, deleting, and keeping finished articles
+
+Three separate choices, because they answer three different questions:
+
+| Question | Setting |
+| --- | --- |
+| What happens on the server when I finish an article? | archive it (`archive_finished`, `archive_read`, `archive_abandoned`) or delete it outright (`remote_delete_instead_of_archive`) |
+| Does the local copy stay? | `delete_local_after_archive` |
+| If it stays, where does it go? | `archive_directory` — moved there with its sidecar, history entry and collection membership |
+
+The archive folder is the useful middle ground: the article leaves the unread
+ones but does not disappear, which is what a finished long read usually wants.
 
 ## Requirements
 
@@ -449,6 +529,19 @@ Your note and the chapter title travel with the highlight. Highlight colours are
 mapped onto the four Karakeep supports; anything else becomes yellow.
 
 ## Notes and limitations
+
+### Fork-specific
+
+- **`remote_delete_instead_of_archive` deletes the bookmark in Karakeep**, and
+  nothing on the device can undo it. Archiving, the default, only moves it out
+  of the unread list.
+- **PDFs are not converted.** If Karakeep holds an article whose crawled content
+  is a PDF, you get whatever Karakeep extracted (usually text), not the PDF.
+  Only actual uploaded files are saved as files.
+- **Highlights for PDFs stay on the device.** See above.
+- **`only_favourited` with a list or tag scope** is applied client-side, and only
+  when the server actually reports the `favourited` field; a page that omits it
+  is not mistaken for "nothing is a favourite", which would empty the scope.
 
 - **Karakeep has no EPUB export endpoint**, unlike Wallabag, so the plugin builds
   the EPUB itself: it sanitises the crawled HTML, hands it to crengine's

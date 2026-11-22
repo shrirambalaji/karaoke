@@ -147,6 +147,34 @@ Still unverified, and worth doing on a real Kobo:
    CA bundle and will refuse an unknown issuer; it surfaces as
    `Could not reach the server.`
 
+### Added by this fork, none of it yet exercised on hardware
+
+`articleutil.lua`'s new helpers (`originalExtension`, `originalTitle`) have
+specs. Everything below is in `main.lua`, which the spec runner cannot reach, so
+these were only linted, reviewed against KOReader v2026.07.1's API, and built.
+
+1. **A PDF bookmark end to end** — needs **`Assets: Read`** on the API key, or
+   every asset returns 403 and the sync summary names it. Confirm the file
+   arrives with its `.pdf` extension and `[kk-id_…]` marker, then that reading
+   it to the end archives it in Karakeep, and that *Rebuild* replaces it in place
+   without losing the sidecar.
+2. **An oversized original** — check that a file over `max_original_mb` is
+   skipped with a reason in the summary, and that no `.part` file is left behind.
+3. **Archive folder** — with `archive_directory` set, finish an article and
+   confirm the file, its `.sdr` and its history entry all moved, and that
+   collections still list it. `FileManager:moveFile` plus
+   `DocSettings.updateLocation` is the same sequence wallabag uses, but the
+   combination has not been run here.
+4. **`remote_delete_instead_of_archive`** — irreversible; try it on a throwaway
+   bookmark first.
+5. **Add an article offline** — with Wi-Fi off, add a link, confirm it queues,
+   then sync and confirm it is `POST`ed before the fetch.
+6. **`only_favourited` with a list or tag scope**, against a server that does
+   not include the `favourited` field, to confirm the scope does not come back
+   empty.
+7. **`ignore_tags`** with a tag containing a space, which is the case the
+   comma-splitting exists for.
+
 ## Adding specs
 
 `spec/runner.lua` is a deliberately small `describe`/`it` harness. busted is not
