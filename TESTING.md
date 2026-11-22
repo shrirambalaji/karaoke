@@ -215,6 +215,18 @@ these were only linted, reviewed against KOReader v2026.07.1's API, and built.
 6. **`only_favourited` with a list or tag scope**, against a server that does
    not include the `favourited` field, to confirm the scope does not come back
    empty.
+9. **Interrupt a PDF download** (kill KOReader mid-transfer, or pull the cable
+   on a desktop run) and confirm the next sync fetches it again rather than
+   believing it is already there. The `.part` file should be gone from the
+   download folder once the next sync starts.
+10. **An oversized original.** Set `max_original_mb` to 1 and sync a larger PDF:
+   the transfer should stop part-way, the summary should say it is over the
+   limit, and the device should not have briefly written the whole file.
+11. **An archive folder inside the download folder.** Finish an article, sync
+   again, and confirm it is not archived a second time.
+12. **A PDF with highlights**: the sync summary should say the highlights were
+   not sent, rather than staying silent.
+
 7. **`ignore_tags`** with a tag containing a space, which is the case the
    comma-splitting exists for.
 8. **`Save and test` with a key that has no `User account` scope.** It should

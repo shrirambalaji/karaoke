@@ -7,6 +7,7 @@ package.path = "./?.lua;./karaoke.koplugin/?.lua;" .. package.path
 
 local Runner = require("spec.runner")
 
+require("spec.api_spec")
 require("spec.articleutil_spec")
 require("spec.config_spec")
 require("spec.epubbuilder_spec")

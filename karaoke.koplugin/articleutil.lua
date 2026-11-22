@@ -101,6 +101,45 @@ function ArticleUtil.trimPartialUtf8(s)
     return s
 end
 
+--- Whether a filename is one of ours that has *not* finished downloading.
+--
+-- A `Title [kk-id_x].pdf.part` left behind by an interrupted sync still carries
+-- the bookmark ID, so a scan that trusted the marker would decide the PDF was
+-- already on the device and never fetch it again -- forever. Temp names are
+-- therefore never counted as downloads, and are cleaned up when a sync starts.
+--
+-- @tparam string name Filename or path.
+-- @treturn bool
+function ArticleUtil.isTempName(name)
+    if type(name) ~= "string" or name == "" then return false end
+    local lower = name:lower()
+    -- .part is ours (see downloadOriginal); the leading dot covers the scratch
+    -- files we write into the download folder, e.g. .karaoke-asset.tmp.
+    return lower:match("%.part$") ~= nil or lower:match("^%.") ~= nil
+end
+
+--- Whether two paths name the same directory, ignoring case and trailing slashes.
+--
+-- Used to recognise the archive folder when it sits inside the download folder,
+-- and so to keep it out of the scan: a file that has been archived has already
+-- been dealt with, and re-reading it would archive it again on every sync. FAT
+-- is case-insensitive, so the comparison is too.
+--
+-- @tparam string|nil a
+-- @tparam string|nil b
+-- @treturn bool
+function ArticleUtil.samePath(a, b)
+    if type(a) ~= "string" or type(b) ~= "string" then return false end
+
+    local function normalise(path)
+        path = path:gsub("/+$", "")
+        if path == "" then path = "/" end
+        return path:lower()
+    end
+
+    return a ~= "" and b ~= "" and normalise(a) == normalise(b)
+end
+
 --- Turn an article title into something safe to write to a Kobo's FAT32 partition.
 -- @tparam string|nil title
 -- @tparam[opt=180] number max_len Maximum length in bytes.

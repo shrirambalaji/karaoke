@@ -29,7 +29,11 @@ local COLOR_MAP = {
 -- Offsets only mean anything for the EPUBs this plugin builds. A PDF's
 -- annotations anchor into pages, which Karakeep has no offsets into, so pushing
 -- them would send the text with a "0,0" position at best; they are skipped
--- instead, and the log says why once per file.
+-- instead.
+--
+-- This module deliberately says nothing about that: it is called per document,
+-- and a line per PDF every sync is noise. The caller counts the skips and
+-- reports them once -- see Karaoke:uploadStatuses().
 --
 -- @tparam string path Local path of a downloaded article.
 -- @treturn bool

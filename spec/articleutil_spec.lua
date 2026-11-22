@@ -970,4 +970,45 @@ describe("failureKind", function()
     end)
 end)
 
+
+describe("isTempName", function()
+    it("rejects the half-written original that carries a bookmark ID", function()
+        -- The bug this exists for: "X [kk-id_abc].pdf.part" is matched by
+        -- getBookmarkId(), so a scan that trusted the marker would believe the
+        -- PDF was already on the device and never fetch it again.
+        assertTrue(ArticleUtil.isTempName("Title [kk-id_abc].pdf.part"))
+        assertEqual(ArticleUtil.getBookmarkId("Title [kk-id_abc].pdf.part"), "abc")
+    end)
+
+    it("rejects our scratch files", function()
+        assertTrue(ArticleUtil.isTempName(".karaoke-asset.tmp"))
+    end)
+
+    it("accepts a finished download and a sidecar", function()
+        assertTrue(not ArticleUtil.isTempName("Title [kk-id_abc].pdf"))
+        assertTrue(not ArticleUtil.isTempName("Title [kk-id_abc].epub"))
+        assertTrue(not ArticleUtil.isTempName("Title [kk-id_abc].sdr"))
+    end)
+
+    it("tolerates empty and non-string input", function()
+        assertTrue(not ArticleUtil.isTempName(nil))
+        assertTrue(not ArticleUtil.isTempName(""))
+    end)
+end)
+
+describe("samePath", function()
+    it("ignores a trailing slash and case, as FAT does", function()
+        assertTrue(ArticleUtil.samePath("/mnt/onboard/archive/", "/mnt/onboard/Archive"))
+    end)
+
+    it("does not confuse a subdirectory with its parent", function()
+        assertTrue(not ArticleUtil.samePath("/mnt/onboard/karakeep", "/mnt/onboard/karakeep/archive"))
+    end)
+
+    it("never matches on nil or empty, so an unset archive folder matches nothing", function()
+        assertTrue(not ArticleUtil.samePath("/mnt/onboard/x", nil))
+        assertTrue(not ArticleUtil.samePath("", ""))
+    end)
+end)
+
 return Runner

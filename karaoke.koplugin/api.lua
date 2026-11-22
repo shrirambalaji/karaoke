@@ -75,7 +75,7 @@ function KarakeepApi:call(method, path, opts)
     local ok, result, code, retry_after
     for attempt = 0, MAX_RETRIES do
         ok, result, code, retry_after =
-            self:_request(method, url, body_json, opts.filepath, opts.quiet)
+            self:_request(method, url, body_json, opts.filepath, opts.quiet, opts.max_bytes)
 
         -- A 429 is refused before the server acts on it, so repeating it is
         -- safe whatever the method. A 5xx or a dropped connection is not: the
@@ -113,7 +113,7 @@ local function retryAfterSeconds(resp_headers)
     return math.min(seconds, 30)
 end
 
-function KarakeepApi:_request(method, url, body_json, filepath, quiet)
+function KarakeepApi:_request(method, url, body_json, filepath, quiet, max_bytes)
     local sink = {}
     local headers = {
         ["Authorization"] = "Bearer " .. self.api_token,
@@ -132,14 +132,35 @@ function KarakeepApi:_request(method, url, body_json, filepath, quiet)
         request.source = ltn12.source.string(body_json)
     end
 
-    local sink_file
+    -- A file sink of our own rather than ltn12.sink.file, for two reasons: the
+    -- write can be stopped the moment it passes max_bytes, and the handle is
+    -- closed in exactly one place.
+    local sink_file, written, over_limit = nil, 0, false
+
     if filepath then
         sink_file = io.open(filepath, "w")
         if not sink_file then
             logger.err("KaraokeApi: cannot open", filepath, "for writing")
             return false, "io_error"
         end
-        request.sink = ltn12.sink.file(sink_file)
+
+        request.sink = ltn12.sink.new(function(chunk, err)
+            if err then return nil, err end
+            -- ltn12 signals the end of the stream by calling the sink with nil.
+            -- There is nothing to close here: the handle is closed once, after
+            -- request() returns, so that an aborted transfer takes the same path.
+            if chunk == nil then return 1 end
+            written = written + #chunk
+            if max_bytes and written > max_bytes then
+                -- Returning nil aborts the transfer. The point of the limit is
+                -- not to need the space: a 300 MB file written in full and then
+                -- deleted has already filled a Clara's storage.
+                over_limit = true
+                return nil, "too large"
+            end
+            return sink_file:write(chunk)
+        end)
+
         socketutil:set_timeout(self.file_block_timeout, self.file_total_timeout)
     else
         request.sink = ltn12.sink.table(sink)
@@ -151,8 +172,15 @@ function KarakeepApi:_request(method, url, body_json, filepath, quiet)
     local code, resp_headers, status = socket.skip(1, http.request(request))
     socketutil:reset_timeout()
 
+    if sink_file then sink_file:close() end
+
+    if over_limit then
+        if filepath then os.remove(filepath) end
+        logger.warn("KaraokeApi: stopped at", max_bytes, "bytes, the limit for", url)
+        return false, "too_large"
+    end
+
     if resp_headers == nil then
-        -- ltn12.sink.file closes the handle itself, so only clean up the file.
         if filepath then os.remove(filepath) end
         logger.err("KaraokeApi: network error", status or code, url)
         return false, "network_error"
@@ -331,12 +359,19 @@ end
 -- @tparam string asset_id
 -- @tparam string filepath
 -- @tparam[opt=false] bool quiet Do not log a failed request at error level. Used
---   for cover art, which is decoration: a key without "Assets: Read" would
+--   for cover art, which is decoration: a key without "Attachments" scope would
 --   otherwise write one error line per article, every sync.
+-- @tparam[opt] number max_bytes Abandon the transfer once the body passes this,
+--   instead of writing it in full and discarding it afterwards.
 -- @treturn bool ok
--- @treturn string|nil filepath, or an error code.
-function KarakeepApi:downloadAsset(asset_id, filepath, quiet)
-    return self:call("GET", "/assets/" .. asset_id, { filepath = filepath, quiet = quiet })
+-- @treturn string|nil filepath, or an error code ("too_large" when the body was
+--   refused for its size).
+function KarakeepApi:downloadAsset(asset_id, filepath, quiet, max_bytes)
+    return self:call("GET", "/assets/" .. asset_id, {
+        filepath = filepath,
+        quiet = quiet,
+        max_bytes = max_bytes,
+    })
 end
 
 --- Update mutable bookmark fields, e.g. { archived = true }.

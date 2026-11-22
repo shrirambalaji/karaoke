@@ -1184,9 +1184,16 @@ function Karaoke:getLocalArticles(dir, map, depth)
             local mode = lfs.attributes(entry_path, "mode")
 
             if mode == "file" then
-                local id = ArticleUtil.getBookmarkId(entry)
-                if id then map[id] = entry_path end
-            elseif mode == "directory" and not entry:match("%.sdr$") then
+                -- A .part still carries the bookmark ID, and counting it would
+                -- make the next sync skip that download for ever.
+                if not ArticleUtil.isTempName(entry) then
+                    local id = ArticleUtil.getBookmarkId(entry)
+                    if id then map[id] = entry_path end
+                end
+            elseif mode == "directory" and not entry:match("%.sdr$")
+                -- An archive folder inside the download folder is where finished
+                -- articles were put precisely so they stop being synced.
+                and not ArticleUtil.samePath(entry_path, self.archive_directory) then
                 if depth < MAX_SCAN_DEPTH then
                     self:getLocalArticles(entry_path, map, depth + 1)
                 else
@@ -1299,6 +1306,36 @@ end
 -- middle of the unread ones. A move that fails falls back to deleting.
 --
 -- @tparam string path
+--- Delete half-written downloads left behind by an interrupted sync.
+--
+-- Only inside the download folder, and only names this plugin wrote, so a user's
+-- own `something.part` is not at risk.
+function Karaoke:removeStaleParts()
+    local dir = self.directory
+    if not dir or lfs.attributes(dir, "mode") ~= "directory" then return 0 end
+
+    local removed = 0
+    for entry in lfs.dir(dir) do
+        local lower = entry:lower()
+        -- Deliberately narrower than isTempName(): that one also hides anything
+        -- dot-prefixed from the scan, which costs nothing, but deleting is a
+        -- different act and only our own scratch names are safe to delete.
+        local ours_scratch = lower:match("%.part$") ~= nil
+            or lower:match("^%.karaoke") ~= nil
+            or lower:match("^%.karako") ~= nil
+
+        if ours_scratch then
+            local path = ffiUtil.joinPath(dir, entry)
+            if lfs.attributes(path, "mode") == "file" and os.remove(path) then
+                removed = removed + 1
+                logger.info("Karaoke: removed an interrupted download:", entry)
+            end
+        end
+    end
+
+    return removed
+end
+
 function Karaoke:removeLocalArticle(path)
     -- Pulling the file out from under an open document is not survivable.
     if self.ui and self.ui.document and self.ui.document.file == path then
@@ -1515,6 +1552,11 @@ function Karaoke:synchronize(quiet, force_redownload)
         UIManager:show(InfoMessage:new{ text = problem })
         return
     end
+
+    -- Scratch files left by an interrupted sync. Removed before the scan rather
+    -- than only ignored by it, so a crash mid-download does not leave a
+    -- half-written PDF occupying the device for ever.
+    self:removeStaleParts()
 
     local local_articles = self:getLocalArticles()
 
@@ -1893,12 +1935,19 @@ function Karaoke:fetchAsset(api, asset_id, max_bytes, quiet)
         if quiet then logger.dbg(...) else logger.warn(...) end
     end
 
-    local ok = api:downloadAsset(asset_id, tmp_path, quiet)
+    local ok, err = api:downloadAsset(asset_id, tmp_path, quiet, max_bytes)
     if not ok then
-        log("Karaoke: could not download asset", asset_id)
+        if err == "too_large" then
+            log(string.format("Karaoke: asset %s passed the %d byte limit - abandoned mid-download",
+                asset_id, max_bytes))
+        else
+            log("Karaoke: could not download asset", asset_id, err)
+        end
+        os.remove(tmp_path)
         return nil
     end
 
+    -- Belt and braces: the sink already refused anything over max_bytes.
     local size = lfs.attributes(tmp_path, "size") or 0
     if size > max_bytes then
         log(string.format("Karaoke: asset %s is %d bytes, over the %d limit - skipping",
@@ -2060,10 +2109,23 @@ function Karaoke:downloadOriginal(api, bookmark, existing_path)
             ArticleUtil.buildFilename(bookmark.id, ArticleUtil.originalTitle(bookmark), ext))
 
     local tmp_path = filepath .. ".part"
+    local max_bytes = (self.max_original_mb or 80) * 1024 * 1024
 
-    local fetched, asset_err, asset_code = api:downloadAsset(content.assetId, tmp_path)
+    -- The limit is passed into the request, so an oversized file stops being
+    -- written the moment it passes: downloading 300 MB and then deleting it has
+    -- already needed the space, which is the thing being avoided.
+    local fetched, asset_err, asset_code =
+        api:downloadAsset(content.assetId, tmp_path, false, max_bytes)
+
     if not fetched then
         os.remove(tmp_path)
+
+        if asset_err == "too_large" then
+            logger.warn("Karaoke: original for", bookmark.id, "is over",
+                self.max_original_mb, "MB - abandoned mid-download")
+            return false, T(_("larger than the %1 MB limit"), self.max_original_mb)
+        end
+
         logger.err("Karaoke: could not download the original file for", bookmark.id,
             asset_err, asset_code)
         -- The status is returned rather than a sentence: a 403 here is almost
@@ -2073,17 +2135,10 @@ function Karaoke:downloadOriginal(api, bookmark, existing_path)
     end
 
     local size = lfs.attributes(tmp_path, "size") or 0
-    local max_bytes = (self.max_original_mb or 80) * 1024 * 1024
 
     if size == 0 then
         os.remove(tmp_path)
         return false, _("the file was empty")
-    end
-
-    if size > max_bytes then
-        os.remove(tmp_path)
-        logger.warn("Karaoke: original for", bookmark.id, "is", size, "bytes, over the limit - skipping")
-        return false, T(_("larger than the %1 MB limit"), self.max_original_mb)
     end
 
     local renamed, err = os.rename(tmp_path, filepath)
@@ -2122,6 +2177,7 @@ function Karaoke:uploadStatuses(local_articles, quiet)
     local Trapper = require("ui/trapper")
     local archived, highlights_sent, unresolved_total, failed = 0, 0, 0, 0
     local deleted_remote = 0
+    local highlights_skipped = 0
     local examined, total = 0, 0
     for _ in pairs(local_articles) do total = total + 1 end
 
@@ -2137,10 +2193,16 @@ function Karaoke:uploadStatuses(local_articles, quiet)
         -- Highlights are pushed for anything that has been opened, not just
         -- finished articles, so notes are not lost if you never mark it read.
         -- Only our EPUBs can be matched back: see Highlights.supports().
-        if self.sync_highlights and doc_settings and Highlights.supports(path) then
-            local created, unresolved = Highlights.push(api, id, path, doc_settings)
-            highlights_sent = highlights_sent + created
-            unresolved_total = unresolved_total + unresolved
+        if self.sync_highlights and doc_settings then
+            if Highlights.supports(path) then
+                local created, unresolved = Highlights.push(api, id, path, doc_settings)
+                highlights_sent = highlights_sent + created
+                unresolved_total = unresolved_total + unresolved
+            else
+                -- PDFs and other originals: counted, and said out loud below.
+                -- Silently dropping them makes a sync that worked look broken.
+                highlights_skipped = highlights_skipped + 1
+            end
         end
 
         if finished then
@@ -2182,6 +2244,11 @@ function Karaoke:uploadStatuses(local_articles, quiet)
         end
     end
 
+    if highlights_skipped > 0 then
+        logger.info("Karaoke: not sending highlights for", highlights_skipped,
+            "non-EPUB document(s): Karakeep has no positions inside a PDF")
+    end
+
     if not quiet then
         Trapper:reset() -- clear the progress widget before the summary
         local lines = {
@@ -2197,6 +2264,10 @@ function Karaoke:uploadStatuses(local_articles, quiet)
         if unresolved_total > 0 then
             table.insert(lines, T(N_("%1 highlight could not be positioned in the article.",
                 "%1 highlights could not be positioned in the article.", unresolved_total), unresolved_total))
+        end
+        if highlights_skipped > 0 then
+            table.insert(lines, T(N_("Highlights in %1 PDF or uploaded file were not sent: Karakeep has no positions inside them.",
+                "Highlights in %1 PDFs or uploaded files were not sent: Karakeep has no positions inside them.", highlights_skipped), highlights_skipped))
         end
         if failed > 0 then
             table.insert(lines, T(N_("%1 article could not be sent, and will be retried next sync.",
