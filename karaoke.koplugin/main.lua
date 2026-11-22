@@ -920,12 +920,22 @@ function Karaoke:testConnection()
         local ok, reason, user = self:getApi():verifyCredentials()
 
         if ok then
+            -- No user object when the key has no "User account" scope: the key
+            -- still works, which is what this test is for, so say so rather
+            -- than refusing to confirm a working setup.
+            local name = user and (user.name or user.email)
             UIManager:show(InfoMessage:new{
-                text = T(_("Connected to Karakeep as %1."), (user and (user.name or user.email)) or "?"),
-                timeout = 3,
+                text = name
+                    and T(_("Connected to Karakeep as %1."), name)
+                    or _("Connected to Karakeep. (No account name: the API key has no User account scope, which only this test uses.)"),
+                timeout = 4,
             })
-        elseif reason == "unauthorized" then
+        elseif reason == "bad_token" then
             UIManager:show(InfoMessage:new{ text = _("Karakeep rejected the API key.") })
+        elseif reason == "missing_bookmarks_scope" then
+            UIManager:show(InfoMessage:new{
+                text = _("The API key is valid, but Karakeep refused to list bookmarks: the key has no Bookmarks scope. Karaoke cannot sync without it."),
+            })
         elseif reason == "not_karakeep" then
             UIManager:show(InfoMessage:new{
                 text = _("No Karakeep API at that address. Enter the server's base address, without /api/v1."),

@@ -160,17 +160,24 @@ or any Admin scope:
 | Resource | Access | Needed for |
 | --- | --- | --- |
 | **Bookmarks** | Read/write | Everything. Read to list and fetch articles; write to archive them |
-| **Assets** | Read | Page archives, and a fallback for article text. Optional |
+| **Attachments** | Read | PDFs and other uploaded files, page archives, and a fallback for article text |
 | **Highlights** | Read/write | Sending highlights back. Read first, to avoid duplicates |
 | **Lists** | Read | Only the "choose a list" picker |
 | **Tags** | Read | Only the "choose a tag" picker |
-| **User account** | Read | Only the `Save and test` button |
+| **User account** | Read | Optional. Without it `Save and test` still passes, it just cannot name the account |
 | *everything else* | None | Never called |
 
-**Assets: Read is the one you can skip.** Ordinary article text arrives inline
-under Bookmarks: Read, whatever its length. Assets: Read is needed only to read a
-saved page archive, and as a safety net when Karakeep fails to expand a large
-article itself — see [Where article text comes from](#where-article-text-comes-from).
+> **The UI calls this resource "Attachments" and the API calls it `assets`.**
+> They are the same scope: the endpoint is `GET /api/v1/assets/{assetId}`, and
+> Karakeep's own translation keys still map `assets` to the label "Attachments".
+> If you went looking for a chip called "Assets" and concluded PDFs were
+> unsupported, that is this mismatch.
+
+**Attachments: Read is no longer optional in this fork.** It is what fetches an
+uploaded PDF — see [PDFs and other uploaded files](#pdfs-and-other-uploaded-files).
+Ordinary article text still arrives inline under Bookmarks: Read, whatever its
+length; Attachments: Read remains optional only if you turn
+`download_originals` off, and is still needed for saved page archives.
 
 Two of these are not what you would guess, so they are worth stating plainly.
 Both were confirmed against Karakeep's own scope enforcement in
@@ -191,15 +198,17 @@ matching feature off:
 
 | If you want | Grant |
 | --- | --- |
-| Downloads only, nothing written back | Bookmarks: **Read** |
-| …plus saved page archives as a content source | Assets: **Read** |
+| Articles only, nothing written back, no PDFs | Bookmarks: **Read** |
+| …plus PDFs, uploaded files and saved page archives | Attachments: **Read** |
 | …plus archive on finish, and tag on archive | Bookmarks: **Read/write** |
 | …plus highlights sent back | Highlights: **Read/write** |
 | …plus picking a list or tag in the menu | Lists: **Read**, Tags: **Read** |
-| …plus the connection test button | User account: **Read** |
+| …plus your account name in the connection test | User account: **Read** |
 
 A key missing a scope fails that one call with `403 API key is missing required
 scope: <scope>`, which the log records — the rest of the sync carries on.
+**Feeds, Prompts, Backups, Rules, Webhooks and Admin are never called**; if
+your key has them, they can be dropped without losing anything.
 
 Give the device its own key rather than reusing one, so you can revoke just that
 one if you lose the Kobo.
@@ -540,16 +549,19 @@ whole thing off and nothing is written.
 
 ## How highlights are matched
 
-This is the one part that is best-effort, and it is worth understanding.
+This is the one part that is best-effort, and it is worth understanding — it
+also changed on the server side in **Karakeep 0.35.0 (2026-11-15)**, so which
+half of it you get depends on your version.
 
 KOReader records a highlight's position as a crengine XPointer into *the EPUB
-this plugin generated*. Karakeep's `/highlights` API wants character offsets into
-*its own* rendered content. Those two coordinate systems have nothing in common,
-so the only thing the two sides genuinely share is the highlighted text itself.
+this plugin generated*. Karakeep's `/highlights` API wants a position inside
+*its own* rendered content. The two coordinate systems have nothing in common,
+so the only thing both sides genuinely share is the highlighted text itself.
 
-So the plugin matches on text:
+What the plugin sends is the text, your note and the chapter title, plus
+character offsets wherever it can work them out:
 
-- A passage found exactly once gets correct offsets.
+- A passage found exactly once in the article gets correct offsets.
 - A passage appearing more than once resolves to its **first** occurrence, which
   may not be the one you highlighted.
 - A passage that cannot be found at all is still sent, with the text and your
@@ -563,6 +575,13 @@ string is indexed and Karakeep is a JavaScript application. Counting bytes
 instead — which is what Lua does by default — puts every highlight in an article
 progressively out of place as soon as it contains anything outside ASCII, and a
 single curly quote or em-dash is enough.
+
+**On Karakeep 0.35.0 and later the offsets matter much less.** That release
+changed the server to find a highlight by its text *and the text around it*
+rather than by raw offsets, so a highlight this plugin could only place
+approximately — or not at all — still lands on the right words, and survives the
+article being re-crawled. The offsets are still sent, and still used by older
+servers, but they are no longer the thing that decides where a highlight appears.
 
 Your note and the chapter title travel with the highlight. Highlight colours are
 mapped onto the four Karakeep supports; anything else becomes yellow.

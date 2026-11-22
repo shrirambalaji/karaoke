@@ -153,7 +153,8 @@ Still unverified, and worth doing on a real Kobo:
 specs. Everything below is in `main.lua`, which the spec runner cannot reach, so
 these were only linted, reviewed against KOReader v2026.07.1's API, and built.
 
-1. **A PDF bookmark end to end** — needs **`Assets: Read`** on the API key, or
+1. **A PDF bookmark end to end** — needs **`Attachments: Read`** on the API key
+   (the `assets` scope; the API and the UI use different words for it), or
    every asset returns 403 and the sync summary names it. Confirm the file
    arrives with its `.pdf` extension and `[kk-id_…]` marker, then that reading
    it to the end archives it in Karakeep, and that *Rebuild* replaces it in place
@@ -174,6 +175,11 @@ these were only linted, reviewed against KOReader v2026.07.1's API, and built.
    empty.
 7. **`ignore_tags`** with a tag containing a space, which is the case the
    comma-splitting exists for.
+8. **`Save and test` with a key that has no `User account` scope.** It should
+   report a connection and say the account name is unavailable, not that the key
+   was rejected. `verifyCredentials()` falls back to `GET /bookmarks` on a 403
+   for exactly this; a key with no Bookmarks scope should instead fail with the
+   missing-scope message.
 
 ## Adding specs
 

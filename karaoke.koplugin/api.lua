@@ -199,13 +199,33 @@ function KarakeepApi:verifyCredentials()
     if ok then
         return true, nil, result
     end
-    if code == 401 or code == 403 then
-        return false, "unauthorized"
+
+    if code == 403 then
+        -- 403 here is not "bad key": the key is valid and simply was not
+        -- granted the "User account" (users) scope, which /users/me alone
+        -- needs. Falling back to a call the plugin cannot work without means a
+        -- key that syncs perfectly well is not reported as rejected -- which
+        -- would send someone off re-pasting a key that was fine.
+        local bookmarks_ok, _, bookmarks_code = self:call("GET", "/bookmarks", {
+            query = { limit = 1 },
+            quiet = true,
+        })
+        if bookmarks_ok then
+            return true, nil, nil
+        end
+        -- Bookmarks: Read is mandatory for the plugin, so this one really is a
+        -- scope problem rather than anything the user can fix by retyping.
+        return false, bookmarks_code == 403 and "missing_bookmarks_scope" or "unknown"
+    end
+
+    if code == 401 then
+        return false, "bad_token"
     elseif code == 404 then
         return false, "not_karakeep"
     elseif result == "network_error" then
         return false, "unreachable"
     end
+
     return false, "unknown"
 end
 
@@ -305,7 +325,8 @@ end
 -- Article images are not fetched this way: epubbuilder.lua gets those from
 -- their original URLs, which keeps the API token off third-party requests.
 --
--- Requires the "Assets: Read" scope on the API key.
+-- Requires the "Attachments" scope on the API key -- called "assets" in the
+-- API's own vocabulary, which is the name in the OpenAPI spec and the path.
 --
 -- @tparam string asset_id
 -- @tparam string filepath
