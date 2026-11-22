@@ -258,3 +258,8 @@ To cover a module that pulls in KOReader, stub what it needs via
 that `socketutil` drags in the whole device stack, which probes SDL and needs a
 display — `epubbuilder.lua` requires the networking modules lazily inside
 `fetchUrl()` for exactly this reason.
+
+16. **Move existing articles into folders**, with a library that predates the
+    feature: confirm the sidecar follows (reading position and highlights intact
+    after opening a moved article), collections still list it, the open document
+    is skipped, and a second run reports nothing to move.

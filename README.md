@@ -581,6 +581,24 @@ only affects what is downloaded next. Old folder names stay until you delete the
 adds the bookmark's creation day: `Morning briefs/2026-11-23/`. The date is fixed
 at creation and never changes, so a date folder is stable once written.
 
+### Organising what is already there
+
+Folders only decide where **new** downloads land, so a library that is already on
+the device stays as it is. **Downloads → Move existing articles into folders**
+converts it in one go, without downloading anything again: the file moves, then
+`DocSettings.updateLocation` takes the sidecar with it and `ReadHistory` /
+`ReadCollection` follow, so reading position, highlights and collection
+membership survive.
+
+It is deliberately conservative. An article that is in no list is left exactly
+where it is — moving it to the top level would be a guess. Anything already in
+the archive folder is untouched, and so is the document you have open. Moving a
+file onto an existing name keeps both, by suffixing the timestamp.
+
+Moving by hand, by deleting local files and syncing again, also works but costs a
+full re-download, and anything already archived in Karakeep will not come back —
+archived bookmarks are out of the sync scope.
+
 ### What it costs
 
 Off by default, and free when off: no list requests at all. On, it stays close to

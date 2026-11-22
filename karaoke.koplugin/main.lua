@@ -616,6 +616,16 @@ Articles carrying any of these tags are not downloaded. Separate them with comma
             callback = function(touchmenu_instance) self:setDateFolders(touchmenu_instance) end,
         },
 {
+    text = _("Move existing articles into folders"),
+    help_text = _([[
+Folders only affect what is downloaded next, so a library that is already on the device stays flat. This moves it into the same layout without downloading anything again: the sidecar, history entry and collections follow the file.
+
+Articles in no list are left where they are, and so is the one you have open.]]),
+    enabled_func = function() return self.lists_as_folders end,
+    keep_menu_open = true,
+    callback = function() self:onMoveExistingIntoFolders() end,
+},
+{
             text = _("Embed images"),
             help_text = _("Images in the article itself. Turning this off makes articles build faster and smaller."),
             checked_func = function() return self.download_images end,
@@ -1302,15 +1312,41 @@ end
 function Karaoke:resolveFolders(api, remote, local_articles)
     if not self.lists_as_folders then return nil end
 
-    local pending, remaining = {}, 0
+    local ids = {}
     for _, bookmark in ipairs(remote or {}) do
-        if not local_articles[bookmark.id] then
-            pending[bookmark.id] = bookmark
-            remaining = remaining + 1
-        end
+        if not local_articles[bookmark.id] then table.insert(ids, bookmark.id) end
     end
+    if #ids == 0 then return {} end
 
-    if remaining == 0 then return {} end
+    -- Dates come from the bookmark objects we already have; the list walk only
+    -- fills in what is missing.
+    local known = {}
+    for _, bookmark in ipairs(remote or {}) do known[bookmark.id] = bookmark end
+
+    local folders = self:resolveFoldersFor(api, ids, known)
+    if not folders then return nil end
+    return folders
+end
+
+--- Which folder each of these bookmarks belongs in, given the lists it is in.
+--
+-- Shared by the sync (for bookmarks that still need downloading) and by the
+-- one-off move of articles already on the device, so both layouts agree.
+--
+-- @tparam table api
+-- @tparam table ids Array of bookmark IDs that need a folder.
+-- @tparam table|nil known Map of ID to bookmark, for anything already in hand.
+-- @treturn table|nil Map of ID to relative folder, or nil when the lists could
+--   not be read at all.
+-- @treturn table|nil { pages = n, unresolved = n } for logging.
+function Karaoke:resolveFoldersFor(api, ids, known)
+    known = known or {}
+    local wanted, remaining = {}, 0
+    for _, id in ipairs(ids) do
+        wanted[id] = true
+        remaining = remaining + 1
+    end
+    if remaining == 0 then return {}, { pages = 0, unresolved = 0 } end
 
     local ok, lists = api:getLists()
     if not ok then
@@ -1347,7 +1383,7 @@ function Karaoke:resolveFolders(api, remote, local_articles)
         return false
     end)
 
-    local chosen = {}
+    local chosen, stamps = {}, {}
     local pages, capped = 0, false
 
     for _, candidate in ipairs(ordered) do
@@ -1373,7 +1409,13 @@ function Karaoke:resolveFolders(api, remote, local_articles)
             end
 
             for _, bookmark in ipairs(page.bookmarks or {}) do
-                if pending[bookmark.id] and not chosen[bookmark.id] then
+                -- The page carries createdAt even without content, which is how a
+                -- bookmark already on the device can still be dated.
+                if bookmark.createdAt and not stamps[bookmark.id] then
+                    stamps[bookmark.id] = bookmark.createdAt
+                end
+
+                if wanted[bookmark.id] and not chosen[bookmark.id] then
                     chosen[bookmark.id] = candidate
                     remaining = remaining - 1
                 end
@@ -1389,12 +1431,12 @@ function Karaoke:resolveFolders(api, remote, local_articles)
     end
 
     local folders = {}
-    for id, bookmark in pairs(pending) do
+    for _, id in ipairs(ids) do
         local candidate = chosen[id]
         local folder = candidate and ArticleUtil.folderForChain(candidate.chain) or nil
 
         if ArticleUtil.wantsDateFolder(self.date_folders, candidate and candidate.list or nil) then
-            local date = ArticleUtil.dateSegment(bookmark)
+            local date = ArticleUtil.dateSegment(known[id] or { createdAt = stamps[id] })
             folder = date and (folder and (folder .. "/" .. date) or date) or folder
         end
 
@@ -1406,7 +1448,7 @@ function Karaoke:resolveFolders(api, remote, local_articles)
     logger.info("Karaoke: folders: placed", placed, "of", placed + remaining,
         "pending bookmark(s) using", pages, "list request(s)")
 
-    return folders
+    return folders, { pages = pages, unresolved = remaining }
 end
 
 --- The absolute folder a bookmark is written into, created on demand.
@@ -1530,6 +1572,151 @@ end
 -- middle of the unread ones. A move that fails falls back to deleting.
 --
 -- @tparam string path
+--- Move articles already on the device into the folder layout.
+--
+-- Folders otherwise only affect what is downloaded next, which is right for a
+-- sync but leaves an existing library flat. This is the one-off that fixes that
+-- without re-downloading anything: the same four updates as the archive move, so
+-- the sidecar, history entry and collections follow the file.
+--
+-- Deliberately conservative: an article in no list is left exactly where it is
+-- (moving it to the top level would be a guess), anything already inside the
+-- archive folder is untouched, and the document that is currently open is
+-- skipped -- pulling a file out from under the reader is not survivable.
+function Karaoke:onMoveExistingIntoFolders()
+    if not self:isReady() then
+        UIManager:show(InfoMessage:new{
+            text = _("Set the server address, API key and download folder first."),
+        })
+        return true
+    end
+
+    if not self.lists_as_folders then
+        UIManager:show(InfoMessage:new{
+            text = _([[Turn on "Folders from lists" first, so that there is a layout to move into.]]),
+        })
+        return true
+    end
+
+    local count = 0
+    for _ in pairs(self:getLocalArticles()) do count = count + 1 end
+
+    if count == 0 then
+        UIManager:show(InfoMessage:new{ text = _("There are no articles on the device yet.") })
+        return true
+    end
+
+    local ConfirmBox = require("ui/widget/confirmbox")
+    UIManager:show(ConfirmBox:new{
+        text = T(N_("Move the article on the device into a folder named after its Karakeep list?",
+                    "Move the %1 articles on the device into folders named after their Karakeep lists?", count), count) ..
+            "\n\n" ..
+            _([[Nothing is downloaded again. Articles already in the right folder are left alone, so are articles in no list, and so is the one you have open.]]),
+        ok_text = _("Move"),
+        ok_callback = function()
+            NetworkMgr:runWhenOnline(function()
+                local Trapper = require("ui/trapper")
+                Trapper:wrap(function() self:moveExistingIntoFolders(self:getApi()) end)
+            end)
+        end,
+    })
+
+    return true
+end
+
+--- @tparam table api
+function Karaoke:moveExistingIntoFolders(api)
+    local Trapper = require("ui/trapper")
+    local ReadHistory = require("readhistory")
+    local ReadCollection = require("readcollection")
+
+    local articles = self:getLocalArticles()
+    local ids = {}
+    for id in pairs(articles) do table.insert(ids, id) end
+    table.sort(ids)
+
+    if #ids == 0 then
+        UIManager:show(InfoMessage:new{ text = _("There are no articles on the device yet.") })
+        return
+    end
+
+    Trapper:info(_("Looking up Karakeep lists..."))
+
+    local folders = self:resolveFoldersFor(api, ids)
+    if not folders then
+        Trapper:reset()
+        UIManager:show(InfoMessage:new{
+            text = _("Could not fetch the lists, so nothing was moved."),
+        })
+        return
+    end
+
+    local moved, in_place, unlisted, skipped, failed = 0, 0, 0, 0, 0
+
+    for index, id in ipairs(ids) do
+        Trapper:info(T(_("Moving articles into folders (%1 of %2)..."), index, #ids), true, true)
+
+        local path = articles[id]
+        local folder = folders[id]
+        local current_dir = path:match("^(.*)/[^/]+$")
+
+        if not folder then
+            -- In no list: leave it where it is rather than guess at the top level.
+            unlisted = unlisted + 1
+        elseif current_dir and ArticleUtil.samePath(current_dir, ffiUtil.joinPath(self.directory, folder)) then
+            in_place = in_place + 1
+        elseif self.archive_directory and ArticleUtil.isUnder(path, self.archive_directory) then
+            skipped = skipped + 1
+        elseif self.ui and self.ui.document and self.ui.document.file == path then
+            skipped = skipped + 1
+        else
+            local target_dir = self:folderPath(folder)
+            local name = path:match("([^/]+)$")
+            local target = name and ffiUtil.joinPath(target_dir, name) or nil
+
+            if target and lfs.attributes(target, "mode") then
+                -- Two articles with the same title: keep both rather than lose one.
+                target = ffiUtil.joinPath(target_dir,
+                    name:gsub("(%.[%w]+)$", "-" .. os.time() .. "%1"))
+            end
+
+            if target and FileManager:moveFile(path, target) then
+                DocSettings.updateLocation(path, target, false)
+                ReadHistory:updateItem(path, target)
+                ReadCollection:updateItem(path, target)
+                moved = moved + 1
+            else
+                failed = failed + 1
+                logger.warn("Karaoke: could not move", path, "to", tostring(target))
+            end
+        end
+    end
+
+    Trapper:reset()
+    self:refreshFileManager()
+
+    local lines = {
+        T(N_("Moved %1 article.", "Moved %1 articles.", moved), moved),
+    }
+    if in_place > 0 then
+        table.insert(lines, T(N_("%1 was already in the right folder.",
+            "%1 were already in the right folder.", in_place), in_place))
+    end
+    if unlisted > 0 then
+        table.insert(lines, T(N_("%1 is in no list and was left where it is.",
+            "%1 are in no list and were left where they are.", unlisted), unlisted))
+    end
+    if skipped > 0 then
+        table.insert(lines, T(_("%1 skipped: open, or already archived."), skipped))
+    end
+    if failed > 0 then
+        table.insert(lines, T(N_("%1 could not be moved.", "%1 could not be moved.", failed), failed))
+    end
+
+    logger.info("Karaoke: folder move:", table.concat(lines, " "))
+    UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
+end
+
 --- Delete half-written downloads left behind by an interrupted sync.
 --
 -- Only inside the download folder, and only names this plugin wrote, so a user's

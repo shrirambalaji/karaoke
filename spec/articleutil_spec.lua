@@ -1147,4 +1147,34 @@ describe("wantsDateFolder", function()
     end)
 end)
 
+
+describe("isUnder", function()
+    it("matches a file inside the folder", function()
+        assertTrue(ArticleUtil.isUnder("/mnt/onboard/karakeep/archive/Title [kk-id_a].pdf",
+            "/mnt/onboard/karakeep/archive"))
+    end)
+
+    it("does not match the folder itself", function()
+        assertTrue(not ArticleUtil.isUnder("/mnt/onboard/karakeep/archive", "/mnt/onboard/karakeep/archive"))
+    end)
+
+    it("does not match a sibling whose name merely starts the same", function()
+        -- "archive-old" is not inside "archive"; a prefix test without the
+        -- separator would say it was.
+        assertTrue(not ArticleUtil.isUnder("/mnt/onboard/karakeep/archive-old/x.pdf",
+            "/mnt/onboard/karakeep/archive"))
+    end)
+
+    it("ignores a trailing slash and case, as FAT does", function()
+        assertTrue(ArticleUtil.isUnder("/mnt/onboard/Karakeep/ARCHIVE/x.pdf",
+            "/mnt/onboard/karakeep/archive/"))
+    end)
+
+    it("never matches on nil or an empty folder", function()
+        assertTrue(not ArticleUtil.isUnder(nil, "/x"))
+        assertTrue(not ArticleUtil.isUnder("/x/y", ""))
+        assertTrue(not ArticleUtil.isUnder("/x/y", nil))
+    end)
+end)
+
 return Runner

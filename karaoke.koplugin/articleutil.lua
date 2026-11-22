@@ -101,6 +101,25 @@ function ArticleUtil.trimPartialUtf8(s)
     return s
 end
 
+--- Whether a path sits inside a directory.
+--
+-- Used to leave alone anything already in the archive folder: it was put there
+-- on purpose, and a folder layout has nothing to say about it.
+--
+-- @tparam string|nil path
+-- @tparam string|nil dir
+-- @treturn bool
+function ArticleUtil.isUnder(path, dir)
+    if type(path) ~= "string" or type(dir) ~= "string" or dir == "" then return false end
+
+    local function normalise(p)
+        return (p:gsub("/+$", "")):lower()
+    end
+
+    local inner, outer = normalise(path), normalise(dir)
+    return inner:sub(1, #outer + 1) == outer .. "/"
+end
+
 --- Whether a filename is one of ours that has *not* finished downloading.
 --
 -- A `Title [kk-id_x].pdf.part` left behind by an interrupted sync still carries
