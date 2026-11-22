@@ -2,7 +2,7 @@
   <img src="docs/logo.svg" width="120" height="120" alt="KaraKo">
 </p>
 
-<h1 align="center">KaraKo</h1>
+<h1 align="center">karaoke</h1>
 
 <p align="center">
   <b>Your Karakeep reading list, offline on a Kobo.</b><br>
