@@ -22,6 +22,7 @@ package.preload["socketutil"] = function()
 end
 package.preload["socket.http"] = function() return { request = function() end } end
 
+local ArticleUtil = require("articleutil")
 local EpubBuilder = require("epubbuilder")
 
 describe("markdownToHtml", function()
@@ -150,6 +151,125 @@ describe("buildDocument", function()
         local bare = { id = "x", content = { type = "link", url = "https://e.com/a" } }
         local out = EpubBuilder.buildDocument(bare, "<p>b</p>")
         assertNoMatch(out, "kk-note")
+    end)
+end)
+
+describe("opf", function()
+    local bookmark = {
+        id = "abc123",
+        title = "A Piece About Kobos",
+        content = { type = "link", url = "https://example.com/kobo" },
+    }
+    local cover = { path = "images/cover.png", media_type = "image/png" }
+
+    it("stays an EPUB 2 package, because crengine reads EPUB 2", function()
+        assertMatch(EpubBuilder.opf(bookmark, "T", {}, nil), 'version="2.0"')
+        assertNoMatch(EpubBuilder.opf(bookmark, "T", {}, cover), "properties=")
+    end)
+
+    it("declares no cover when there is not one", function()
+        local out = EpubBuilder.opf(bookmark, "T", {}, nil)
+        assertNoMatch(out, 'name="cover"')
+        assertNoMatch(out, "cover.xhtml")
+        assertMatch(out, [[<itemref idref="content"/>]])
+    end)
+
+    it("declares the cover the EPUB 2 way: meta plus manifest item", function()
+        local out = EpubBuilder.opf(bookmark, "T", {}, cover)
+        assertMatch(out, [[<meta name="cover" content="cover-img"/>]])
+        assertMatch(out, [[<item id="cover-img" href="images/cover.png" media-type="image/png"/>]])
+        assertMatch(out, [[<item id="cover-page" href="cover.xhtml" media-type="application/xhtml+xml"/>]])
+    end)
+
+    it("puts the cover first in the spine, so opening shows the art", function()
+        local out = EpubBuilder.opf(bookmark, "T", {}, cover)
+        local cover_at = out:find([[<itemref idref="cover-page" linear="yes"/>]], 1, true)
+        local content_at = out:find([[<itemref idref="content"/>]], 1, true)
+        assertTrue(cover_at ~= nil, "the cover must be in the spine")
+        assertTrue(cover_at < content_at, "the cover must precede the text")
+    end)
+
+    it("points the guide at the text, so reading can skip the cover", function()
+        local out = EpubBuilder.opf(bookmark, "T", {}, cover)
+        assertMatch(out, [[<reference type="cover" title="Cover" href="cover.xhtml"/>]])
+        assertMatch(out, [[<reference type="text" title="T" href="content.xhtml"/>]])
+    end)
+
+    it("writes the bookmark's language, defaulting to en", function()
+        assertMatch(EpubBuilder.opf(bookmark, "T", {}, nil), "<dc:language>en</dc:language>")
+        local german = { id = "x", content = { type = "link", language = "de" } }
+        assertMatch(EpubBuilder.opf(german, "T", {}, nil), "<dc:language>de</dc:language>")
+    end)
+
+    it("escapes the title in the guide's title attribute", function()
+        local out = EpubBuilder.opf(bookmark, 'T <script>', {}, nil)
+        assertNoMatch(out, "<script>")
+        assertMatch(out, "&lt;script&gt;")
+    end)
+end)
+
+describe("ncx", function()
+    local bookmark = { id = "abc123" }
+
+    it("always has the article itself as its first entry", function()
+        local out = EpubBuilder.ncx(bookmark, "Title", {})
+        assertMatch(out, [[<navPoint id="navpoint-1" playOrder="1">]])
+        assertMatch(out, "<text>Title</text>")
+        assertMatch(out, [[<content src="content.xhtml"/>]])
+    end)
+
+    it("emits a navPoint per heading, pointing into the document", function()
+        local toc = ArticleUtil.tocFromHeadings({
+            { level = 2, id = "kk-s1", text = "First" },
+            { level = 2, id = "kk-s2", text = "Second" },
+        })
+        local out = EpubBuilder.ncx(bookmark, "Title", toc)
+        assertMatch(out, [[<content src="content.xhtml#kk-s1"/>]])
+        assertMatch(out, [[<content src="content.xhtml#kk-s2"/>]])
+        assertMatch(out, "<text>First</text>")
+    end)
+
+    it("nests an h3 inside its h2 in the XML too", function()
+        local toc = ArticleUtil.tocFromHeadings({
+            { level = 2, id = "kk-s1", text = "First" },
+            { level = 3, id = "kk-s2", text = "Detail" },
+        })
+        local out = EpubBuilder.ncx(bookmark, "Title", toc)
+        local outer = out:find([[<content src="content.xhtml#kk-s1"/>]], 1, true)
+        local inner = out:find([[<content src="content.xhtml#kk-s2"/>]], 1, true)
+        local closes = out:find("</navPoint>", outer, true)
+        assertTrue(inner > outer and inner < closes, "the child must sit inside the parent navPoint")
+    end)
+
+    it("increases playOrder through nested entries", function()
+        local toc = ArticleUtil.tocFromHeadings({
+            { level = 2, id = "a", text = "A" },
+            { level = 3, id = "b", text = "B" },
+        })
+        local out = EpubBuilder.ncx(bookmark, "Title", toc)
+        -- Title is 1, the h2 is 2, its nested h3 is 3.
+        assertMatch(out, 'id="navpoint-2" playOrder="2"')
+        assertMatch(out, 'id="navpoint-3" playOrder="3"')
+    end)
+
+    it("escapes heading text rather than letting it break the XML", function()
+        local toc = { { id = "kk-s1", text = "a < b & c", children = {} } }
+        local out = EpubBuilder.ncx(bookmark, "Title", toc)
+        assertNoMatch(out, "a < b")
+        assertMatch(out, "a &lt; b &amp; c")
+    end)
+end)
+
+describe("coverXhtml", function()
+    it("is a document with the cover image in it", function()
+        local out = EpubBuilder.coverXhtml("images/cover.png")
+        assertMatch(out, [[<img src="images/cover.png" alt="Cover"/>]])
+        assertMatch(out, [[<html xmlns="http://www.w3.org/1999/xhtml">]])
+        assertNoMatch(out, "<svg")
+    end)
+
+    it("declares XML, so it is a document rather than a fragment", function()
+        assertMatch(EpubBuilder.coverXhtml("images/cover.png"), [[<?xml version="1.0" encoding="UTF-8"?>]])
     end)
 end)
 

@@ -341,6 +341,7 @@ function Karaoke:loadSettings()
     self.scope_name = self.settings:readSetting("scope_name")
 
     self.download_images = self.settings:readSetting("download_images", true)
+    self.download_covers = self.settings:readSetting("download_covers", true)
     self.max_images = self.settings:readSetting("max_images", 20)
     self.prefer_archive = self.settings:readSetting("prefer_archive", false)
     self.max_archive_mb = self.settings:readSetting("max_archive_mb", 4)
@@ -380,6 +381,7 @@ function Karaoke:onFlushSettings()
         self.settings:saveSetting("scope_id", self.scope_id)
         self.settings:saveSetting("scope_name", self.scope_name)
         self.settings:saveSetting("download_images", self.download_images)
+        self.settings:saveSetting("download_covers", self.download_covers)
         self.settings:saveSetting("max_images", self.max_images)
         self.settings:saveSetting("prefer_archive", self.prefer_archive)
         self.settings:saveSetting("max_archive_mb", self.max_archive_mb)
@@ -428,6 +430,12 @@ end
 -- Menu
 --------------------------------------------------------------------------------
 
+-- The menu used to be eighteen entries in one flat list. On a 6" screen that is
+-- a screenful of scrolling before reaching the thing you came for, with no hint
+-- of which entries belong together. It is grouped now: the three actions that
+-- get used most stay at the top, and everything else is one tap away under a
+-- heading that says what it is for. No entry was removed, and every text_func
+-- entry keeps its refresh path through the touchmenu_instance it is handed.
 function Karaoke:addToMainMenu(menu_items)
     menu_items.karaoke = {
         text = _("Karaoke"),
@@ -447,256 +455,326 @@ Saves a link to Karakeep without leaving the reader. With no connection the link
                 end,
             },
             {
-                text_func = function()
-                    local queued = #self:getQueue()
-                    if queued == 0 then return _("Upload queued articles: none") end
-                    return T(N_("Upload queued articles: %1", "Upload queued articles: %1", queued), queued)
-                end,
-                keep_menu_open = true,
-                callback = function() self:onUploadKaraokeQueue() end,
-            },
-            {
-                text = _("Rebuild all articles"),
-                help_text = _([[
-Re-fetches every article on the device and builds it again, instead of skipping the ones already downloaded.
-
-Use this after upgrading Karaoke, to pick up an improvement to how EPUBs are built. Highlights and reading position are kept.]]),
-                callback = function() self:onRedownloadKaraoke() end,
-            },
-            {
-                text = _("Send read status and highlights"),
-                keep_menu_open = true,
-                callback = function()
-                    if not self:isReady() then
-                        UIManager:show(InfoMessage:new{
-                            text = _("Set the server address, API key and download folder first."),
-                        })
-                        return
-                    end
-                    NetworkMgr:runWhenOnline(function()
-                        local Trapper = require("ui/trapper")
-                        Trapper:wrap(function()
-                            self:uploadStatuses(self:getLocalArticles(), false)
-                        end)
-                    end)
-                end,
-            },
-            {
                 text = _("Go to Karaoke folder"),
                 callback = function() self:onGoToKaraokeDirectory() end,
+                separator = true,
+            },
+            {
+                text = _("Sync"),
+                sub_item_table_func = function() return self:syncMenu() end,
+            },
+            {
+                text = _("Downloads"),
+                sub_item_table_func = function() return self:downloadsMenu() end,
+            },
+            {
+                text = _("Sending"),
+                sub_item_table_func = function() return self:sendingMenu() end,
             },
             {
                 text = _("Server"),
-                keep_menu_open = true,
-                callback = function(touchmenu_instance) self:editServerSettings(touchmenu_instance) end,
+                sub_item_table_func = function() return self:serverMenu() end,
             },
-            {
-                text_func = function()
-                    if self.config_path then return _("Settings file: found") end
-                    return _("Settings file: none")
-                end,
-                help_text = _([[
-Set up Karaoke from a text file instead of typing an API key on the device.
+        },
+    }
+end
 
-The file seeds these settings the first time Karaoke runs. They then appear in these menus like any other, and whatever you set here wins from that point on.
+--- Getting articles off the server: rebuilding, queueing, and when to sync.
+--
+-- A sub_item_table_func rather than a fixed table, so the queue count in its
+-- label is re-read every time the submenu is opened; nothing here can go stale
+-- by sitting in a menu that was built once.
+function Karaoke:syncMenu()
+    return {
+        {
+            text = _("Rebuild all articles"),
+            help_text = _([[
+Re-fetches every article on the device and builds it again, instead of skipping the ones already downloaded.
 
-Editing the file later does nothing by itself -- choose "Reload it now" to pull the changes in.]]),
-                separator = true,
-                keep_menu_open = true,
-                sub_item_table_func = function() return self:configFileMenu() end,
-            },
-            {
-                text_func = function()
-                    return T(_("What to sync: %1"), self:describeScope())
-                end,
-                keep_menu_open = true,
-                sub_item_table_func = function() return self:scopeMenu() end,
-            },
-            {
-                text = _("Only download favourites"),
-                help_text = _("Leaves everything you have not marked as a favourite in Karakeep off the device."),
-                checked_func = function() return self.only_favourited end,
-                callback = function() self.only_favourited = not self.only_favourited end,
-            },
-            {
-                text_func = function()
-                    if self.ignore_tags == "" then return _("Ignore tags: none") end
-                    return T(_("Ignore tags: %1"), self.ignore_tags)
-                end,
-                help_text = _([[
+Use this after upgrading Karaoke, to pick up an improvement to how EPUBs are built. Highlights and reading position are kept.]]),
+            callback = function() self:onRedownloadKaraoke() end,
+        },
+        {
+            text_func = function()
+                local queued = #self:getQueue()
+                if queued == 0 then return _("Upload queued articles: none") end
+                return T(N_("Upload queued articles: %1", "Upload queued articles: %1", queued), queued)
+            end,
+            keep_menu_open = true,
+            callback = function() self:onUploadKaraokeQueue() end,
+            separator = true,
+        },
+        {
+            text = _("Sync when Wi-Fi connects"),
+            help_text = _([[
+Syncs when you turn Wi-Fi on, never by turning it on itself.
+
+While you are reading, only read status and highlights are sent, so a sync cannot interrupt you. A full sync, including downloads, runs when no document is open.]]),
+            checked_func = function() return self.auto_sync end,
+            callback = function()
+                self.auto_sync = not self.auto_sync
+                self:setupAutoSync()
+            end,
+        },
+        {
+            text_func = function()
+                return T(_("Sync at most every: %1 min"), self.auto_sync_interval)
+            end,
+            enabled_func = function() return self.auto_sync end,
+            keep_menu_open = true,
+            callback = function(touchmenu_instance)
+                UIManager:show(SpinWidget:new{
+                    title_text = _("Minimum time between automatic syncs"),
+                    value = self.auto_sync_interval,
+                    value_min = 5,
+                    value_max = 720,
+                    value_step = 5,
+                    value_hold_step = 30,
+                    callback = function(spin)
+                        self.auto_sync_interval = spin.value
+                        if touchmenu_instance then touchmenu_instance:updateItems() end
+                    end,
+                })
+            end,
+        },
+    }
+end
+
+--- What lands on the device, and where: scope, folder, images, sizes.
+--
+-- The archive folder lives here rather than under Sending because it is about
+-- where a file ends up, which is the question this submenu answers. Its label
+-- says what it does to finished articles, since that is the only time it acts.
+function Karaoke:downloadsMenu()
+    return {
+        {
+            text_func = function()
+                return T(_("What to sync: %1"), self:describeScope())
+            end,
+            keep_menu_open = true,
+            sub_item_table_func = function() return self:scopeMenu() end,
+        },
+        {
+            text = _("Only download favourites"),
+            help_text = _("Leaves everything you have not marked as a favourite in Karakeep off the device."),
+            checked_func = function() return self.only_favourited end,
+            callback = function() self.only_favourited = not self.only_favourited end,
+        },
+        {
+            text_func = function()
+                if self.ignore_tags == "" then return _("Ignore tags: none") end
+                return T(_("Ignore tags: %1"), self.ignore_tags)
+            end,
+            help_text = _([[
 Articles carrying any of these tags are not downloaded. Separate them with commas; a tag may contain spaces.]]),
-                keep_menu_open = true,
-                callback = function(touchmenu_instance) self:setIgnoreTags(touchmenu_instance) end,
-            },
-            {
-                text_func = function()
-                    return T(_("Articles per sync: %1"), self.articles_per_sync)
-                end,
-                keep_menu_open = true,
-                callback = function(touchmenu_instance) self:setArticlesPerSync(touchmenu_instance) end,
-            },
-            {
-                text = _("Download folder"),
-                keep_menu_open = true,
-                callback = function(touchmenu_instance) self:setDownloadDirectory(touchmenu_instance) end,
-            },
-            {
-                text = _("Embed images"),
-                checked_func = function() return self.download_images end,
-                callback = function() self.download_images = not self.download_images end,
-            },
-            {
-                text = _("Download original files (PDF, images)"),
-                help_text = _([[
+            keep_menu_open = true,
+            callback = function(touchmenu_instance) self:setIgnoreTags(touchmenu_instance) end,
+        },
+        {
+            text_func = function()
+                return T(_("Articles per sync: %1"), self.articles_per_sync)
+            end,
+            keep_menu_open = true,
+            callback = function(touchmenu_instance) self:setArticlesPerSync(touchmenu_instance) end,
+            separator = true,
+        },
+        {
+            text = _("Download folder"),
+            keep_menu_open = true,
+            callback = function(touchmenu_instance) self:setDownloadDirectory(touchmenu_instance) end,
+        },
+        {
+            text = _("Embed images"),
+            help_text = _("Images in the article itself. Turning this off makes articles build faster and smaller."),
+            checked_func = function() return self.download_images end,
+            callback = function() self.download_images = not self.download_images end,
+        },
+        {
+            text = _("Article covers"),
+            help_text = _([[
+Uses the article's lead image as its cover, so it shows its art in KOReader's mosaic view and on the device's shelves instead of a text-only tile.
+
+The copy Karakeep stores is used first, which needs the API key's "Assets: Read" scope; the page's own image is used when that is unavailable. Missing covers are skipped silently -- an article is worth reading without one.]]),
+            checked_func = function() return self.download_covers end,
+            callback = function() self.download_covers = not self.download_covers end,
+        },
+        {
+            text = _("Download original files (PDF, images)"),
+            help_text = _([[
 Uploaded files are saved exactly as they are, rather than being rebuilt into an EPUB -- there is nothing to extract from them. Turn this off to keep only articles.]]),
-                checked_func = function() return self.download_originals end,
-                callback = function() self.download_originals = not self.download_originals end,
-            },
-            {
-                text_func = function()
-                    return T(_("Largest original: %1 MB"), self.max_original_mb)
-                end,
-                enabled_func = function() return self.download_originals end,
-                keep_menu_open = true,
-                callback = function(touchmenu_instance) self:setMaxOriginalMb(touchmenu_instance) end,
-            },
-            {
-                text = _("Prefer the saved page archive"),
-                help_text = _([[
+            checked_func = function() return self.download_originals end,
+            callback = function() self.download_originals = not self.download_originals end,
+        },
+        {
+            text_func = function()
+                return T(_("Largest original: %1 MB"), self.max_original_mb)
+            end,
+            enabled_func = function() return self.download_originals end,
+            keep_menu_open = true,
+            callback = function(touchmenu_instance) self:setMaxOriginalMb(touchmenu_instance) end,
+            separator = true,
+        },
+        {
+            text = _("Prefer the saved page archive"),
+            help_text = _([[
 Off (recommended): use Karakeep's extracted article, which is just the prose.
 
 On: use your SingleFile upload or Karakeep's full page archive instead, which is the whole page including navigation, sidebars and banners. Karakeep already extracts its article text from a precrawled archive, so this is rarely needed -- it is here for pages where that extraction went wrong.
 
 Either way, an archive is used as a fallback when no extracted article exists.]]),
-                checked_func = function() return self.prefer_archive end,
-                callback = function() self.prefer_archive = not self.prefer_archive end,
-                separator = true,
-            },
-            {
-                text = _("Sync when Wi-Fi connects"),
-                help_text = _([[
-Syncs when you turn Wi-Fi on, never by turning it on itself.
+            checked_func = function() return self.prefer_archive end,
+            callback = function() self.prefer_archive = not self.prefer_archive end,
+            separator = true,
+        },
+        {
+            text_func = function()
+                if not self.archive_directory or self.archive_directory == "" then
+                    return _("Move finished articles to an archive folder: off")
+                end
+                return T(_("Archive folder: %1"), self.archive_directory)
+            end,
+            help_text = _([[
+Instead of deleting a finished article, move it and its sidecar to another folder -- so it leaves the unread ones but stays readable. Off deletes it instead, when "Delete the local copy once archived" is on under Sending.]]),
+            keep_menu_open = true,
+            callback = function(touchmenu_instance)
+                if self.archive_directory and self.archive_directory ~= "" then
+                    self.archive_directory = nil
+                    if touchmenu_instance then touchmenu_instance:updateItems() end
+                else
+                    self:setArchiveDirectory(touchmenu_instance)
+                end
+            end,
+        },
+    }
+end
 
-While you are reading, only read status and highlights are sent, so a sync cannot interrupt you. A full sync, including downloads, runs when no document is open.]]),
-                checked_func = function() return self.auto_sync end,
-                callback = function()
-                    self.auto_sync = not self.auto_sync
-                    self:setupAutoSync()
-                end,
-            },
-            {
-                text_func = function()
-                    return T(_("Sync at most every: %1 min"), self.auto_sync_interval)
-                end,
-                enabled_func = function() return self.auto_sync end,
-                keep_menu_open = true,
-                separator = true,
-                callback = function(touchmenu_instance)
-                    UIManager:show(SpinWidget:new{
-                        title_text = _("Minimum time between automatic syncs"),
-                        value = self.auto_sync_interval,
-                        value_min = 5,
-                        value_max = 720,
-                        value_step = 5,
-                        value_hold_step = 30,
-                        callback = function(spin)
-                            self.auto_sync_interval = spin.value
-                            if touchmenu_instance then touchmenu_instance:updateItems() end
-                        end,
+--- Everything that goes the other way: read status, highlights, archiving.
+--
+-- "When an article is finished" stays one submenu of its own: those six settings
+-- only make sense together, and splitting them across two levels of this menu
+-- would hide the fact that turning off archiving silently disables the rest.
+function Karaoke:sendingMenu()
+    return {
+        {
+            text = _("Send read status and highlights"),
+            help_text = _("Sends now, without downloading anything."),
+            keep_menu_open = true,
+            callback = function()
+                if not self:isReady() then
+                    UIManager:show(InfoMessage:new{
+                        text = _("Set the server address, API key and download folder first."),
                     })
-                end,
-            },
-            {
-                text = _("When an article is finished"),
-                sub_item_table = {
-                    {
-                        text = _("Archive it in Karakeep"),
-                        help_text = _("Applies when you mark an article as finished."),
-                        checked_func = function() return self.archive_finished end,
-                        callback = function() self.archive_finished = not self.archive_finished end,
-                    },
-                    {
-                        text = _("Archive when 100% read"),
-                        checked_func = function() return self.archive_read end,
-                        callback = function() self.archive_read = not self.archive_read end,
-                    },
-                    {
-                        text = _("Archive when marked as abandoned"),
-                        checked_func = function() return self.archive_abandoned end,
-                        callback = function() self.archive_abandoned = not self.archive_abandoned end,
-                        separator = true,
-                    },
-                    {
-                        text_func = function()
-                            if self.archive_tag == "" then
-                                return _("Also add a tag: off")
-                            end
-                            return T(_("Also add a tag: %1"), self.archive_tag)
-                        end,
-                        keep_menu_open = true,
-                        callback = function(touchmenu_instance) self:setArchiveTag(touchmenu_instance) end,
-                    },
-                    {
-                        text = _("Delete the local copy once archived"),
-                        help_text = _("Turn this off to keep finished articles on the device."),
-                        checked_func = function() return self.delete_local_after_archive end,
-                        callback = function()
-                            self.delete_local_after_archive = not self.delete_local_after_archive
-                        end,
-                    },
-                    {
-                        text_func = function()
-                            if not self.archive_directory or self.archive_directory == "" then
-                                return _("Move the local copy to an archive folder: off")
-                            end
-                            return T(_("Archive folder: %1"), self.archive_directory)
-                        end,
-                        help_text = _([[
-Instead of deleting a finished article, move it and its sidecar to another folder -- so it leaves the unread ones but stays readable. Off deletes it, when "Delete the local copy" is on.]]),
-                        keep_menu_open = true,
-                        callback = function(touchmenu_instance)
-                            if self.archive_directory and self.archive_directory ~= "" then
-                                self.archive_directory = nil
-                                if touchmenu_instance then touchmenu_instance:updateItems() end
-                            else
-                                self:setArchiveDirectory(touchmenu_instance)
-                            end
-                        end,
-                    },
-                    {
-                        text = _("Delete in Karakeep instead of archiving"),
-                        help_text = _([[
+                    return
+                end
+                NetworkMgr:runWhenOnline(function()
+                    local Trapper = require("ui/trapper")
+                    Trapper:wrap(function()
+                        self:uploadStatuses(self:getLocalArticles(), false)
+                    end)
+                end)
+            end,
+            separator = true,
+        },
+        {
+            text = _("Send highlights to Karakeep"),
+            help_text = _([[
+Highlights are matched to the article by their text, because KOReader and Karakeep describe positions in incompatible ways. A passage that appears more than once matches its first occurrence, and one that cannot be found is still sent, but without a position. PDFs and other uploaded files are skipped: their annotations anchor into pages, which Karakeep has no offsets into.]]),
+            checked_func = function() return self.sync_highlights end,
+            callback = function() self.sync_highlights = not self.sync_highlights end,
+        },
+        {
+            text = _("Send the review as tags"),
+            help_text = _([[
+When an article is archived, its review note is sent to Karakeep as tags, separated by commas. The review field is the one piece of text an e-reader keyboard makes bearable to type.]]),
+            checked_func = function() return self.send_review_as_tags end,
+            callback = function() self.send_review_as_tags = not self.send_review_as_tags end,
+            separator = true,
+        },
+        {
+            text = _("When an article is finished"),
+            sub_item_table = {
+                {
+                    text = _("Archive it in Karakeep"),
+                    help_text = _("Applies when you mark an article as finished."),
+                    checked_func = function() return self.archive_finished end,
+                    callback = function() self.archive_finished = not self.archive_finished end,
+                },
+                {
+                    text = _("Archive when 100% read"),
+                    checked_func = function() return self.archive_read end,
+                    callback = function() self.archive_read = not self.archive_read end,
+                },
+                {
+                    text = _("Archive when marked as abandoned"),
+                    checked_func = function() return self.archive_abandoned end,
+                    callback = function() self.archive_abandoned = not self.archive_abandoned end,
+                    separator = true,
+                },
+                {
+                    text_func = function()
+                        if self.archive_tag == "" then
+                            return _("Also add a tag: off")
+                        end
+                        return T(_("Also add a tag: %1"), self.archive_tag)
+                    end,
+                    keep_menu_open = true,
+                    callback = function(touchmenu_instance) self:setArchiveTag(touchmenu_instance) end,
+                },
+                {
+                    text = _("Delete the local copy once archived"),
+                    help_text = _("Turn this off to keep finished articles on the device."),
+                    checked_func = function() return self.delete_local_after_archive end,
+                    callback = function()
+                        self.delete_local_after_archive = not self.delete_local_after_archive
+                    end,
+                },
+                {
+                    text = _("Delete in Karakeep instead of archiving"),
+                    help_text = _([[
 Archiving moves the article out of the unread list but keeps it on the server. This deletes the bookmark outright, which cannot be undone from the device.]]),
-                        checked_func = function() return self.remote_delete_instead_of_archive end,
-                        callback = function()
-                            self.remote_delete_instead_of_archive = not self.remote_delete_instead_of_archive
-                        end,
-                    },
+                    checked_func = function() return self.remote_delete_instead_of_archive end,
+                    callback = function()
+                        self.remote_delete_instead_of_archive = not self.remote_delete_instead_of_archive
+                    end,
                 },
             },
-            {
-                text = _("Send highlights to Karakeep"),
-                help_text = _([[
-Highlights are matched to the article by their text, because KOReader and Karakeep describe positions in incompatible ways. A passage that appears more than once matches its first occurrence, and one that cannot be found is still sent, but without a position. PDFs and other uploaded files are skipped: their annotations anchor into pages, which Karakeep has no offsets into.]]),
-                checked_func = function() return self.sync_highlights end,
-                callback = function() self.sync_highlights = not self.sync_highlights end,
-            },
-            {
-                text = _("Send the review as tags"),
-                help_text = _([[
-When an article is archived, its review note is sent to Karakeep as tags, separated by commas. The review field is the one piece of text an e-reader keyboard makes bearable to type.]]),
-                checked_func = function() return self.send_review_as_tags end,
-                callback = function() self.send_review_as_tags = not self.send_review_as_tags end,
-                separator = true,
-            },
-            {
-                text_func = function()
-                    return T(_("Network timeout: %1 s"), self.network_timeout)
-                end,
-                help_text = _("How long to wait for the server before giving up on a request. Raise it on a slow connection."),
-                keep_menu_open = true,
-                callback = function(touchmenu_instance) self:setNetworkTimeout(touchmenu_instance) end,
-            },
+        },
+    }
+end
+
+--- The connection, and the optional settings file.
+--
+-- The address and API key open a dialog rather than living inline: both need a
+-- keyboard, and neither is something to tap by accident.
+function Karaoke:serverMenu()
+    return {
+        {
+            text = _("Server address and API key"),
+            keep_menu_open = true,
+            callback = function(touchmenu_instance) self:editServerSettings(touchmenu_instance) end,
+        },
+        {
+            text_func = function()
+                return T(_("Network timeout: %1 s"), self.network_timeout)
+            end,
+            help_text = _("How long to wait for the server before giving up on a request. Raise it on a slow connection."),
+            keep_menu_open = true,
+            callback = function(touchmenu_instance) self:setNetworkTimeout(touchmenu_instance) end,
+            separator = true,
+        },
+        {
+            text_func = function()
+                if self.config_path then return _("Settings file: found") end
+                return _("Settings file: none")
+            end,
+            help_text = _([[
+Set up Karaoke from a text file instead of typing an API key on the device.
+
+The file seeds these settings the first time Karaoke runs. They then appear in these menus like any other, and whatever you set here wins from that point on.
+
+Editing the file later does nothing by itself -- choose "Reload it now" to pull the changes in.]]),
+            keep_menu_open = true,
+            sub_item_table_func = function() return self:configFileMenu() end,
         },
     }
 end
@@ -1482,6 +1560,9 @@ function Karaoke:synchronize(quiet, force_redownload)
     local downloaded, failed, skipped = 0, 0, 0
     local cancelled = false
     local first_failure
+    -- Kept for the dialog below, not just counted: a number tells you something
+    -- went wrong, a list of titles and reasons tells you what to do about it.
+    local failures = {}
 
     for index, bookmark in ipairs(remote) do
         local existing = local_articles[bookmark.id]
@@ -1514,6 +1595,7 @@ function Karaoke:synchronize(quiet, force_redownload)
             else
                 failed = failed + 1
                 first_failure = first_failure or reason
+                table.insert(failures, { title = title, reason = reason })
             end
         end
     end
@@ -1534,13 +1616,58 @@ function Karaoke:synchronize(quiet, force_redownload)
     Trapper:reset()
     self:refreshFileManager()
 
-    local lines = {
-        force_redownload
-            and T(N_("Rebuilt %1 article.", "Rebuilt %1 articles.", downloaded), downloaded)
-            or T(N_("Downloaded %1 article.", "Downloaded %1 articles.", downloaded), downloaded),
+    -- "Downloaded 0 articles." is what this used to say whenever nothing
+    -- happened, which is true and useless: it reads the same whether the scope
+    -- was empty, everything was already here, or the plugin is unconfigured.
+    -- The counts are classified in ArticleUtil.summaryKind() so the wording can
+    -- differ, and so the classification itself is covered by the specs.
+    local kind = ArticleUtil.summaryKind{
+        downloaded = downloaded,
+        skipped = skipped,
+        failed = failed,
+        removed = removed,
+        fetched = #remote,
+        configured = api:isConfigured(),
     }
-    if skipped > 0 then
+
+    -- Cancelling is not an outcome the counts can classify: it says nothing
+    -- about the rest of the scope, so it overrides the kind.
+    if cancelled then kind = "cancelled" end
+
+    local lines = {}
+
+    if kind == "cancelled" then
+        -- Not a failure, so it must not read like one: say what was done before
+        -- the cancel rather than classifying the counts as an outcome.
+        table.insert(lines, T(N_("Sync cancelled after %1 article.",
+            "Sync cancelled after %1 articles.", downloaded), downloaded))
+    elseif kind == "not_configured" then
+        table.insert(lines, _("Set the server address, API key and download folder first."))
+    elseif kind == "downloaded" then
+        table.insert(lines, force_redownload
+            and T(N_("Rebuilt %1 article.", "Rebuilt %1 articles.", downloaded), downloaded)
+            or T(N_("Downloaded %1 article.", "Downloaded %1 articles.", downloaded), downloaded))
+    elseif kind == "cleaned_up" then
+        table.insert(lines, _("Nothing new to download; finished articles were tidied up."))
+    elseif kind == "failed" then
+        table.insert(lines, _("Nothing from this sync could be downloaded."))
+    elseif kind == "all_present" then
+        table.insert(lines, _("Everything in this scope is already on the device."))
+    elseif kind == "nothing_unread" then
+        table.insert(lines, _("No unread articles in this scope."))
+    else
+        table.insert(lines, _("Nothing new to download."))
+    end
+
+    if skipped > 0 and kind ~= "all_present" then
         table.insert(lines, T(N_("%1 already on the device.", "%1 already on the device.", skipped), skipped))
+    end
+    if not complete and not cancelled then
+        -- Without this, a capped sync that happened to download nothing reads
+        -- as "everything in this scope is already on the device", which is the
+        -- one thing a capped sync cannot know.
+        table.insert(lines, T(N_("Only the first %1 article was checked (see Articles per sync).",
+            "Only the first %1 articles were checked (see Articles per sync).", #remote), #remote))
     end
     if archived > 0 then
         table.insert(lines, T(N_("Archived %1 article in Karakeep.", "Archived %1 articles in Karakeep.", archived), archived))
@@ -1550,8 +1677,11 @@ function Karaoke:synchronize(quiet, force_redownload)
     end
     if failed > 0 then
         table.insert(lines, T(N_("%1 article could not be downloaded.", "%1 articles could not be downloaded.", failed), failed))
-        if first_failure then
-            table.insert(lines, T(_("First reason: %1"), first_failure))
+        -- Only in the quiet case: the notification cannot carry a scrolling list,
+        -- so it gets the first reason and the log has the rest. A manual sync
+        -- shows every one of them in its own dialog just below.
+        if quiet and first_failure then
+            table.insert(lines, T(_("First reason: %1"), self:describeFailure(first_failure)))
         end
     end
     if upload_failed > 0 then
@@ -1565,7 +1695,71 @@ function Karaoke:synchronize(quiet, force_redownload)
         UIManager:show(Notification:new{ text = table.concat(lines, " ") })
     else
         UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
+        if #failures > 0 then self:showFailures(failures) end
     end
+end
+
+--- One sentence for a failed download, from what the builder or downloader said.
+--
+-- Reasons arrive as either a machine code from EpubBuilder or a sentence from
+-- downloadOriginal, so the classification is in ArticleUtil.failureKind() and
+-- only the wording lives here.
+--
+-- A 403 on this API is nearly always a key missing a scope rather than a bad
+-- key, so that case spells out the fix. It is the difference between "an
+-- article failed, shrug" and "add Assets: Read to the API key".
+--
+-- @tparam string|nil reason
+-- @treturn string
+function Karaoke:describeFailure(reason)
+    local kind = ArticleUtil.failureKind(reason)
+
+    if kind == "no_content" then
+        return _("Karakeep has no readable text for it.")
+    elseif kind == "http_403" then
+        return _([[The server refused it. If this is a PDF or an image, the API key is probably missing the "Assets: Read" scope.]])
+    elseif kind == "http" then
+        return T(_("The server answered with an error (%1)."), ArticleUtil.displayText(reason, "?"))
+    elseif kind == "write" then
+        return _("The EPUB could not be written to the download folder.")
+    elseif kind == "unsupported" then
+        return _("KOReader has no reader for that file type.")
+    elseif kind == "not_configured" then
+        return _("Nothing is configured yet.")
+    elseif kind == "network" then
+        return _("Could not reach the server.")
+    elseif kind == "server" then
+        return _("The server sent an answer this plugin could not use.")
+    end
+
+    -- The common case for an uploaded original: downloadOriginal() writes
+    -- sentences for the reader ("larger than the 80 MB limit"), so passing them
+    -- through unchanged is better than replacing them with "unknown".
+    return ArticleUtil.displayText(reason, _("Unknown reason."))
+end
+
+--- List every article that failed, and why.
+--
+-- The summary keeps to a count because a quiet sync turns it into a
+-- notification. This is the version that can be acted on: a heading per article
+-- and the reason under it, scrolling if it needs to, in the same shape as
+-- KOReader's own crash-log viewer.
+--
+-- @tparam table failures Array of { title = …, reason = … }.
+function Karaoke:showFailures(failures)
+    local lines = {}
+    for _, failure in ipairs(failures) do
+        table.insert(lines, failure.title)
+        table.insert(lines, "    " .. self:describeFailure(failure.reason))
+        table.insert(lines, "")
+    end
+
+    local TextViewer = require("ui/widget/textviewer")
+    UIManager:show(TextViewer:new{
+        title = T(N_("%1 article could not be downloaded",
+            "%1 articles could not be downloaded", #failures), #failures),
+        text = table.concat(lines, "\n"),
+    })
 end
 
 -- The per-sync cap tops out at 200 and a page holds up to 100, so a healthy
@@ -1688,19 +1882,26 @@ end
 -- @tparam table api
 -- @tparam string asset_id
 -- @tparam number max_bytes
+-- @tparam[opt=false] bool quiet Log a failure at debug level instead of warning.
+--   Set for covers: decoration that is allowed to be absent must not fill the
+--   log with one warning per article when the key lacks "Assets: Read".
 -- @treturn string|nil Contents, or nil.
-function Karaoke:fetchAsset(api, asset_id, max_bytes)
+function Karaoke:fetchAsset(api, asset_id, max_bytes, quiet)
     local tmp_path = ffiUtil.joinPath(self.directory, ".karaoke-asset.tmp")
 
-    local ok = api:downloadAsset(asset_id, tmp_path)
+    local function log(...)
+        if quiet then logger.dbg(...) else logger.warn(...) end
+    end
+
+    local ok = api:downloadAsset(asset_id, tmp_path, quiet)
     if not ok then
-        logger.warn("Karaoke: could not download asset", asset_id)
+        log("Karaoke: could not download asset", asset_id)
         return nil
     end
 
     local size = lfs.attributes(tmp_path, "size") or 0
     if size > max_bytes then
-        logger.warn(string.format("Karaoke: asset %s is %d bytes, over the %d limit - skipping",
+        log(string.format("Karaoke: asset %s is %d bytes, over the %d limit - skipping",
             asset_id, size, max_bytes))
         os.remove(tmp_path)
         return nil
@@ -1795,6 +1996,15 @@ function Karaoke:downloadArticle(api, bookmark, existing_path)
         body_html = body_html,
         include_images = self.download_images,
         max_images = self.max_images,
+        include_covers = self.download_covers,
+        -- Cover art Karakeep stores is behind the API, so the fetch comes back
+        -- through the client; epubbuilder never carries a token. The budget is
+        -- passed in rather than duplicated, so the ceiling keeps living in the
+        -- one place that knows what it is for.
+        fetch_asset = function(asset_id, max_bytes)
+            -- quiet: a missing cover must not warn once per article.
+            return self:fetchAsset(api, asset_id, max_bytes, true)
+        end,
         -- Returned, not discarded: Trapper:info() answers false when the reader
         -- taps to cancel, which abandons the build rather than making them wait
         -- out every image first.
@@ -1851,10 +2061,15 @@ function Karaoke:downloadOriginal(api, bookmark, existing_path)
 
     local tmp_path = filepath .. ".part"
 
-    if not api:downloadAsset(content.assetId, tmp_path) then
+    local fetched, asset_err, asset_code = api:downloadAsset(content.assetId, tmp_path)
+    if not fetched then
         os.remove(tmp_path)
-        logger.err("Karaoke: could not download the original file for", bookmark.id)
-        return false, _("download failed")
+        logger.err("Karaoke: could not download the original file for", bookmark.id,
+            asset_err, asset_code)
+        -- The status is returned rather than a sentence: a 403 here is almost
+        -- always the API key missing "Assets: Read", and describeFailure() can
+        -- only say so if the code survives. See ArticleUtil.failureKind().
+        return false, asset_code and ("HTTP " .. asset_code) or tostring(asset_err)
     end
 
     local size = lfs.attributes(tmp_path, "size") or 0

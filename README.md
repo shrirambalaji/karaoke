@@ -83,6 +83,7 @@ Everything `wallabag.koplugin` does that upstream KaraKo did not, plus PDFs:
 | Delete in Karakeep instead of archiving | `remote_delete_instead_of_archive` |
 | Send the review note as tags | `send_review_as_tags` |
 | Configurable network timeout | `network_timeout` |
+| Cover art from Karakeep, in mosaic view and on shelves | `download_covers` |
 
 The word "originals" is deliberate: an uploaded PDF is never converted, never
 re-fetched through the crawler, and never summarised. It is the bytes the user
@@ -333,8 +334,10 @@ Anywhere under the data directory itself always works, because KOReader owns it:
 On a Kobo, somewhere under `/mnt/onboard` is both writable and visible to the
 native library.
 
-If the folder is fine and articles still fail, the sync summary now names the
-first reason, and the log has one line per failure tagged `Karaoke:`.
+If the folder is fine and articles still fail, a manual sync lists every article
+it could not download with the reason beneath it, and the log has one line per
+failure tagged `Karaoke:`. A 403 among those reasons is almost always a key
+rather than a server: see [API key scopes](#api-key-scopes).
 
 ## Seeing the log
 
@@ -360,7 +363,7 @@ quickest way to catch a stale install — the line numbers in a stack trace will
 not tell you:
 
 ```
-INFO  Karaoke: version 0.6.0, main.lua modified 2026-08-02 09:14:03, loaded from …/plugins/karaoke.koplugin
+INFO  Karaoke: version 0.9.0, main.lua modified 2026-08-02 09:14:03, loaded from …/plugins/karaoke.koplugin
 ```
 
 If that timestamp is older than your last `cp`, KOReader is running the previous
@@ -377,15 +380,20 @@ on a Kobo or Kindle — stdout is the only place the log appears.
 
 ## Set up
 
-1. **Karaoke → Server.** Enter your server's base address (e.g.
-   `https://karakeep.example.com`, or `http://192.168.1.10:3000` on a LAN) and
-   your API key. `Save and test` reports whether the address and key work — a
-   pasted `/api/v1` suffix is stripped for you.
-2. **Karaoke → Download folder.** Pick where articles should live. On a Kobo,
-   somewhere under `/mnt/onboard` keeps them visible in the native library too.
-3. **Karaoke → What to sync.** All unarchived bookmarks (the default), or a
-   single list or tag — the plugin fetches your lists and tags to choose from.
+1. **Karaoke → Server → Server address and API key.** Enter your server's base
+   address (e.g. `https://karakeep.example.com`, or `http://192.168.1.10:3000`
+   on a LAN) and your API key. `Save and test` reports whether the address and
+   key work — a pasted `/api/v1` suffix is stripped for you.
+2. **Karaoke → Downloads → Download folder.** Pick where articles should live.
+   On a Kobo, somewhere under `/mnt/onboard` keeps them visible in the native
+   library too.
+3. **Karaoke → Downloads → What to sync.** All unarchived bookmarks (the
+   default), or a single list or tag — the plugin fetches your lists and tags to
+   choose from.
 4. **Karaoke → Synchronise now.**
+
+Everything else is grouped by what it is for — **Sync**, **Downloads**, **Sending**
+and **Server** — with the three actions used most left at the top level.
 
 You can bind *Synchronise Karaoke* to a gesture under
 **Settings → Gestures**.
@@ -393,9 +401,9 @@ You can bind *Synchronise Karaoke* to a gesture under
 ### Setting up from a file instead
 
 Typing an API key on an e-reader keyboard is miserable, so settings can be read
-from a plain text file instead. **Karaoke → Settings file → Create an example
-file** writes a commented one for you; edit it on a computer and use *Reload it
-now*, or just restart KOReader.
+from a plain text file instead. **Karaoke → Server → Settings file → Create an
+example file** writes a commented one for you; edit it on a computer and use
+*Reload it now*, or just restart KOReader.
 
 ```ini
 # karaoke.conf
@@ -405,11 +413,12 @@ directory  = /mnt/onboard/karakeep
 
 articles_per_sync = 50
 download_images   = false
+download_covers   = true
 archive_tag       = read-on-kobo
 ```
 
-Checked in this order, first found wins — **Settings file → Where Karaoke looks**
-shows the list with the active one ticked:
+Checked in this order, first found wins — **Server → Settings file → Where
+Karaoke looks** shows the list with the active one ticked:
 
 1. `<koreader data dir>/karaoke.conf`
 2. `<koreader data dir>/settings/karaoke.conf`
@@ -428,8 +437,8 @@ Notes on how it behaves:
 - The file **seeds** settings the first time Karaoke runs. They then appear in the
   menus like any other setting, and **whatever you set in the menus wins** from
   that point on.
-- Editing the file later does nothing by itself. Use **Settings file → Reload it
-  now** to pull the changes in, which overwrites the matching settings.
+- Editing the file later does nothing by itself. Use **Server → Settings file →
+  Reload it now** to pull the changes in, which overwrites the matching settings.
 - Anything the file leaves out is under the menu's control from the start.
 - Values are taken literally to end of line, so URLs and tokens need no quoting.
   `key: value` works as well as `key = value`; `#` and `;` start a comment;
@@ -438,6 +447,84 @@ Notes on how it behaves:
 - The file holds your API key in plain text. Keep it readable only by you, and
   give the device its own key so it can be revoked on its own.
 
+## Reading experience
+
+What a downloaded article looks like on the device, and what you can tune about
+it.
+
+### Cover art
+
+Karakeep holds a lead image for most articles, and 0.9.0 uses it as the article's
+cover: the tile in KOReader's mosaic view, and on the device's shelves, shows the
+picture instead of a text-only thumbnail.
+
+- The copy Karakeep serves is preferred, which needs the **Assets: Read** scope
+  on the API key. The page's own image is used when that is not available.
+- The bytes are sniffed rather than trusting the URL, so a JPEG behind a `.png`
+  name is stored correctly, and an HTML error page never becomes a picture.
+- A cover that is missing, over 2 MB, or not an image is skipped silently. The
+  article is still built and still readable; only the art is missing.
+
+**Downloads → Article covers** turns it off, and `download_covers = false` in the
+config file does the same. Off means a slightly faster sync and smaller files —
+but the art is the difference between a shelf of titles and a shelf of grey
+rectangles, so it is on by default.
+
+The cover is declared the EPUB 2 way (`<meta name="cover">` plus a manifest
+item), not with the EPUB 3 `properties="cover-image"`: the package has to stay a
+2.0 package, because that is what crengine reads. The cover page is first in the
+spine, and the guide still points at the text, so opening an article shows the
+art and reading carries straight on into it.
+
+### Typography and layout
+
+The stylesheet is deliberately short. Font, size, line spacing and margins
+belong to the reader, and crengine applies the device's own style tweaks on top
+of whatever an EPUB asks for — so none of that is set here. What is set is what
+looks visibly wrong on a 6" screen otherwise:
+
+- **Hyphenation** under justified text, so a narrow column stops leaving rivers
+  of white space between words.
+- **Code blocks** are left-aligned, wrap long lines instead of running off the
+  page, and are kept on one page. This matters most for writing about
+  programming, where one long token would otherwise disappear past the edge.
+- **Figures, code blocks and tables** do not split across a page break.
+- **Tables** take the full width at a slightly smaller size, so a wide one fits
+  the screen instead of being clipped.
+- **Rules, borders and code backgrounds** are translucent greys rather than
+  fixed colours, so they stay legible in night mode.
+
+### Table of contents
+
+Every `h2` becomes an entry in the book's table of contents, with `h3`s nested
+under the `h2` above them, so a long article can be navigated from KOReader's
+contents menu instead of by paging. An article with no headings still has one
+entry: its title.
+
+The heading ids are generated — stable, numbered in document order — rather than
+derived from the heading text, so repeated headings cannot collide and
+rebuilding an article produces the same ids.
+
+### Language
+
+`dc:language` comes from the language Karakeep recorded for the article, falling
+back to English. The crawler only fills it in when the page declared one, so the
+fallback is common; it matters because crengine chooses its hyphenation
+dictionary from this value, which makes a wrong language a layout problem rather
+than a metadata one.
+
+### When something fails
+
+A manual sync that could not download some articles shows a second dialog
+listing every one of them with its reason underneath, rather than a count and a
+single example. That is what turns "3 articles could not be downloaded" into
+"the API key is missing the Assets: Read scope".
+
+The summary above it also says which kind of nothing happened: nothing unread in
+this scope, everything already on the device, finished articles tidied up, or
+nothing configured yet. "Downloaded 0 articles" was true in all of those and
+useful in none.
+
 ## Rebuilding articles you already have
 
 An article on the device is skipped on every later sync — that is what stops a
@@ -445,9 +532,9 @@ sync re-fetching your whole library each time. It also means an improvement to
 how EPUBs are built reaches only *new* articles, with no way to apply it to the
 ones you have short of deleting files by hand and guessing which were affected.
 
-**Karaoke → Rebuild all articles** re-fetches every article on the device and
-builds it again. Use it after upgrading Karaoke. It is also bindable as a gesture,
-under **Settings → Gestures**.
+**Karaoke → Sync → Rebuild all articles** re-fetches every article on the device
+and builds it again. Use it after upgrading Karaoke. It is also bindable as a
+gesture, under **Settings → Gestures**.
 
 - Read status and highlights are **sent to Karakeep first**, so nothing is lost
   server-side even if a rebuild goes wrong.
@@ -489,9 +576,9 @@ download the article again and will never archive it.
 
 ## Automatic syncing
 
-Off by default. **Karaoke → Sync when Wi-Fi connects** reacts to the network
-coming up — it never turns the radio on itself, which would be a bad trade on a
-device that spends most of its life asleep.
+Off by default. **Karaoke → Sync → Sync when Wi-Fi connects** reacts to the
+network coming up — it never turns the radio on itself, which would be a bad
+trade on a device that spends most of its life asleep.
 
 What it does depends on what you are doing:
 
@@ -544,8 +631,8 @@ are worth knowing:
   still matches, so the highlight is treated as already present.
 - Highlighting the same passage twice on the device sends it once.
 
-If any of that bothers you, **Karaoke → Send highlights to Karakeep** turns the
-whole thing off and nothing is written.
+If any of that bothers you, **Karaoke → Sending → Send highlights to Karakeep**
+turns the whole thing off and nothing is written.
 
 ## How highlights are matched
 
@@ -600,6 +687,10 @@ mapped onto the four Karakeep supports; anything else becomes yellow.
 - **`only_favourited` with a list or tag scope** is applied client-side, and only
   when the server actually reports the `favourited` field; a page that omits it
   is not mistaken for "nothing is a favourite", which would empty the scope.
+- **A cover costs one extra request per article.** It comes from the same
+  Karakeep asset the article's images do, or from the page's own `og:image`, and
+  is the one image you see before opening the article — which is why it has its
+  own 2 MB budget rather than competing with the article's images.
 
 - **Karakeep has no EPUB export endpoint**, unlike Wallabag, so the plugin builds
   the EPUB itself: it sanitises the crawled HTML, hands it to crengine's

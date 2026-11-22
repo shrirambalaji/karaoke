@@ -43,6 +43,7 @@ Config.SCHEMA = {
     network_timeout = "number",
 
     download_images = "boolean",
+    download_covers = "boolean",
     download_originals = "boolean",
     only_favourited = "boolean",
     prefer_archive = "boolean",
@@ -162,6 +163,7 @@ function Config.template()
         "",
         "# articles_per_sync = 30",
         "# download_images   = true",
+        "# download_covers   = true",
         "# sync_highlights   = true",
         "# archive_tag       = read-on-kobo",
         "",

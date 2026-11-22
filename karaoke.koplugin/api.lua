@@ -330,10 +330,13 @@ end
 --
 -- @tparam string asset_id
 -- @tparam string filepath
+-- @tparam[opt=false] bool quiet Do not log a failed request at error level. Used
+--   for cover art, which is decoration: a key without "Assets: Read" would
+--   otherwise write one error line per article, every sync.
 -- @treturn bool ok
 -- @treturn string|nil filepath, or an error code.
-function KarakeepApi:downloadAsset(asset_id, filepath)
-    return self:call("GET", "/assets/" .. asset_id, { filepath = filepath })
+function KarakeepApi:downloadAsset(asset_id, filepath, quiet)
+    return self:call("GET", "/assets/" .. asset_id, { filepath = filepath, quiet = quiet })
 end
 
 --- Update mutable bookmark fields, e.g. { archived = true }.

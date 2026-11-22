@@ -181,6 +181,12 @@ describe("sanitizeHtml", function()
         local html = "<h2>Title</h2><p>Body with <em>emphasis</em>.</p>"
         assertEqual(ArticleUtil.sanitizeHtml(html), html)
     end)
+
+    it("keeps id attributes, which the table of contents points at", function()
+        -- The ids are added after sanitising, but the page's own anchors have to
+        -- survive it: in-page links in the article refer to them.
+        assertMatch(ArticleUtil.sanitizeHtml('<h2 id="kk-s1">Title</h2>'), 'id="kk-s1"')
+    end)
 end)
 
 describe("htmlToText", function()
@@ -744,6 +750,223 @@ describe("originalTitle", function()
     it("never returns an empty title", function()
         assertEqual(ArticleUtil.originalTitle{ content = { type = "asset" } }, "Untitled")
         assertEqual(ArticleUtil.originalTitle{ title = "" }, "Untitled")
+    end)
+end)
+
+describe("extensionForMediaType", function()
+    it("picks the extension that matches the sniffed type", function()
+        assertEqual(ArticleUtil.extensionForMediaType("image/png"), ".png")
+        assertEqual(ArticleUtil.extensionForMediaType("image/webp"), ".webp")
+        assertEqual(ArticleUtil.extensionForMediaType("image/jpeg"), ".jpg")
+    end)
+
+    it("defaults to .jpg when the type is unknown or absent", function()
+        assertEqual(ArticleUtil.extensionForMediaType(nil), ".jpg")
+        assertEqual(ArticleUtil.extensionForMediaType("application/pdf"), ".jpg")
+    end)
+end)
+
+describe("coverSources", function()
+    it("prefers the asset Karakeep serves over the page's own image", function()
+        local sources = ArticleUtil.coverSources{
+            imageAssetId = "asset-1",
+            imageUrl = "https://example.com/a.jpg",
+        }
+        assertEqual(#sources, 2)
+        assertEqual(sources[1].kind, "asset")
+        assertEqual(sources[1].asset_id, "asset-1")
+        assertEqual(sources[2].kind, "url")
+    end)
+
+    it("offers the URL alone when there is no asset", function()
+        local sources = ArticleUtil.coverSources{ imageUrl = "https://example.com/a.jpg" }
+        assertEqual(#sources, 1)
+        assertEqual(sources[1].url, "https://example.com/a.jpg")
+    end)
+
+    it("offers nothing when there is no cover", function()
+        assertEqual(#ArticleUtil.coverSources{}, 0)
+        assertEqual(#ArticleUtil.coverSources(nil), 0)
+    end)
+
+    it("ignores sources it cannot fetch", function()
+        -- A relative path has nothing to resolve against, and a data: URI would
+        -- have to be base64 decoded before its bytes could even be sniffed.
+        assertEqual(#ArticleUtil.coverSources{ imageUrl = "/a.jpg" }, 0)
+        assertEqual(#ArticleUtil.coverSources{ imageUrl = "data:image/png;base64,AAAA" }, 0)
+        assertEqual(#ArticleUtil.coverSources{ imageUrl = "" }, 0)
+    end)
+end)
+
+describe("assignHeadingIds", function()
+    it("numbers h2 and h3 in document order", function()
+        local html, headings = ArticleUtil.assignHeadingIds(
+            "<h2>One</h2><p>x</p><h3>Sub</h3><h2>Two</h2>")
+
+        assertMatch(html, '<h2 id="kk-s1">One</h2>')
+        assertMatch(html, '<h3 id="kk-s2">Sub</h3>')
+        assertMatch(html, '<h2 id="kk-s3">Two</h2>')
+        assertEqual(#headings, 3)
+        assertEqual(headings[1].level, 2)
+        assertEqual(headings[2].level, 3)
+        assertEqual(headings[3].text, "Two")
+    end)
+
+    it("numbers the same way on a rebuild, so a re-download stays stable", function()
+        local input = "<h2>A</h2><h2>B</h2>"
+        local _, first = ArticleUtil.assignHeadingIds(input)
+        local _, second = ArticleUtil.assignHeadingIds(input)
+        assertEqual(first[2].id, second[2].id)
+    end)
+
+    it("keeps an id the page already had", function()
+        local html, headings = ArticleUtil.assignHeadingIds('<h2 id="intro">Intro</h2>')
+        assertMatch(html, '<h2 id="intro">Intro</h2>')
+        assertEqual(headings[1].id, "intro")
+    end)
+
+    it("takes the label from the text, not the markup", function()
+        local _, headings = ArticleUtil.assignHeadingIds("<h2>Use <em>less</em> &amp; code</h2>")
+        assertEqual(headings[1].text, "Use less & code")
+    end)
+
+    it("leaves headings it has no use for alone", function()
+        local html, headings = ArticleUtil.assignHeadingIds("<h1>Title</h1><h4>Deep</h4>")
+        assertEqual(html, "<h1>Title</h1><h4>Deep</h4>")
+        assertEqual(#headings, 0)
+    end)
+
+    it("never produces an empty label", function()
+        local _, headings = ArticleUtil.assignHeadingIds("<h2></h2>")
+        assertEqual(headings[1].text, "…")
+    end)
+
+    it("tolerates non-string input", function()
+        local html, headings = ArticleUtil.assignHeadingIds(nil)
+        assertEqual(html, "")
+        assertEqual(#headings, 0)
+    end)
+end)
+
+describe("tocFromHeadings", function()
+    it("nests an h3 under the h2 above it", function()
+        local toc = ArticleUtil.tocFromHeadings({
+            { level = 2, id = "a", text = "A" },
+            { level = 3, id = "a1", text = "A1" },
+            { level = 3, id = "a2", text = "A2" },
+            { level = 2, id = "b", text = "B" },
+        })
+        assertEqual(#toc, 2)
+        assertEqual(#toc[1].children, 2)
+        assertEqual(toc[1].children[1].id, "a1")
+        assertEqual(#toc[2].children, 0)
+    end)
+
+    it("keeps an h3 with no h2 before it, rather than dropping it", function()
+        local toc = ArticleUtil.tocFromHeadings({
+            { level = 3, id = "x", text = "X" },
+        })
+        assertEqual(#toc, 1)
+        assertEqual(toc[1].id, "x")
+    end)
+
+    it("handles an article with no headings", function()
+        assertEqual(#ArticleUtil.tocFromHeadings({}), 0)
+        assertEqual(#ArticleUtil.tocFromHeadings(nil), 0)
+    end)
+end)
+
+describe("language", function()
+    it("uses the language the crawler recorded", function()
+        assertEqual(ArticleUtil.language{ content = { language = "de" } }, "de")
+    end)
+
+    it("keeps a full tag, which crengine understands", function()
+        assertEqual(ArticleUtil.language{ content = { language = "en-GB" } }, "en-GB")
+    end)
+
+    it("falls back to the bookmark's own field", function()
+        assertEqual(ArticleUtil.language{ language = "fr", content = {} }, "fr")
+    end)
+
+    it("defaults to en, which is all Karakeep often has", function()
+        assertEqual(ArticleUtil.language{ content = {} }, "en")
+        assertEqual(ArticleUtil.language(nil), "en")
+    end)
+
+    it("ignores a value that is not shaped like a language tag", function()
+        assertEqual(ArticleUtil.language{ content = { language = "not a tag" } }, "en")
+        assertEqual(ArticleUtil.language{ content = { language = "" } }, "en")
+        assertEqual(ArticleUtil.language{ content = { language = 42 } }, "en")
+    end)
+end)
+
+describe("summaryKind", function()
+    it("says the plugin is unconfigured before anything else", function()
+        assertEqual(ArticleUtil.summaryKind{ configured = false, downloaded = 3 }, "not_configured")
+    end)
+
+    it("reports a download when something was downloaded", function()
+        assertEqual(ArticleUtil.summaryKind{ downloaded = 2, skipped = 1 }, "downloaded")
+    end)
+
+    it("distinguishes a tidy-up from a download", function()
+        assertEqual(ArticleUtil.summaryKind{ removed = 2, fetched = 5 }, "cleaned_up")
+    end)
+
+    it("says nothing was downloaded when everything failed", function()
+        assertEqual(ArticleUtil.summaryKind{ failed = 3, fetched = 3 }, "failed")
+    end)
+
+    it("says everything is already here", function()
+        assertEqual(ArticleUtil.summaryKind{ skipped = 4, fetched = 4 }, "all_present")
+    end)
+
+    it("separates an empty scope from an empty result", function()
+        assertEqual(ArticleUtil.summaryKind{ fetched = 0 }, "nothing_unread")
+        assertEqual(ArticleUtil.summaryKind{ fetched = 4 }, "nothing_new")
+    end)
+
+    it("tolerates a missing or empty table", function()
+        assertEqual(ArticleUtil.summaryKind{ downloaded = 0 }, "nothing_unread")
+        assertEqual(ArticleUtil.summaryKind(nil), "nothing_new")
+    end)
+end)
+
+describe("failureKind", function()
+    it("recognises a missing content failure however it is worded", function()
+        assertEqual(ArticleUtil.failureKind("no_content"), "no_content")
+        assertEqual(ArticleUtil.failureKind("no readable content"), "no_content")
+    end)
+
+    it("singles out a 403, which has an actual fix", function()
+        assertEqual(ArticleUtil.failureKind("HTTP 403"), "http_403")
+    end)
+
+    it("recognises other HTTP statuses, wherever the code appears", function()
+        assertEqual(ArticleUtil.failureKind("HTTP 500"), "http")
+        assertEqual(ArticleUtil.failureKind("The file could not be fetched (HTTP 502)."), "http")
+    end)
+
+    it("groups the ways writing the EPUB can fail", function()
+        assertEqual(ArticleUtil.failureKind("zip_open_failed"), "write")
+        assertEqual(ArticleUtil.failureKind("could not write OEBPS/main.lua"), "write")
+        assertEqual(ArticleUtil.failureKind("archive is only 12 bytes"), "write")
+        assertEqual(ArticleUtil.failureKind("could not save the file"), "write")
+        assertEqual(ArticleUtil.failureKind("io_error"), "write")
+    end)
+
+    it("recognises the transport and configuration failures", function()
+        assertEqual(ArticleUtil.failureKind("network_error"), "network")
+        assertEqual(ArticleUtil.failureKind("not_configured"), "not_configured")
+        assertEqual(ArticleUtil.failureKind("unsupported file type"), "unsupported")
+        assertEqual(ArticleUtil.failureKind("http_error"), "server")
+    end)
+
+    it("leaves an unrecognised reason to be shown as it is", function()
+        assertEqual(ArticleUtil.failureKind("larger than the 80 MB limit"), "unknown")
+        assertEqual(ArticleUtil.failureKind(nil), "unknown")
+        assertEqual(ArticleUtil.failureKind(""), "unknown")
     end)
 end)
 

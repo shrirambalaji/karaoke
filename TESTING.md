@@ -109,6 +109,23 @@ the URL, that an image which fails to download leaves no `<img>` behind, that
 the image size budget drops images without failing the article, and that a
 cancelled build abandons the file rather than writing half of one.
 
+It also asserts the two structures that only exist inside the finished archive:
+
+- **Covers.** The cover page, the image named for its sniffed type, `<meta
+  name="cover" content="cover-img"/>` matching its manifest item, the cover
+  first in the spine, no EPUB 3 `properties=` claimed, `include_covers = false`
+  writing neither, and a non-image response leaving no cover behind. With
+  `KK_IMG_SERVER` set it also checks the page-URL fallback and that an HTML error
+  page at that URL is skipped.
+- **Table of contents.** That the heading ids survive crengine's balancer, that
+  there is a navPoint per heading plus one for the article, that an `h3`'s
+  navPoint is nested inside its `h2`'s, and that `dc:language` follows the
+  bookmark rather than being hardcoded.
+
+The TOC assertions read the NCX and the XHTML. They do not open the book, so
+`validateAndFixToc(): TOC is fine` on a device is still the check that the
+contents list renders (below).
+
 ## What is verified, and what is not
 
 Verified against KOReader v2026.07:
@@ -121,6 +138,31 @@ Verified against KOReader v2026.07:
   well-formed XML.
 - Ragged HTML is balanced; images are fetched, sniffed and embedded, with
   failures dropped cleanly.
+
+Added in 0.9.0 and **not yet verified on a device** — the cover and TOC
+structures are asserted by `tools/epubcheck.lua`, but everything below is about
+how crengine and the Kobo's own library actually render them:
+
+- **Cover art in mosaic view and on the shelves.** Whether the plugin's cover
+  shows as the tile, and whether `cover.xhtml` is what you land on when you open
+  the article. The store's own library may index cover art at import time rather
+  than reading the EPUB, which would leave shelves bare until a rescan — worth
+  knowing either way.
+- **Table of contents in the reader.** Open the contents menu on a long article:
+  one entry per `h2`, `h3` indented, and tapping one lands on the right heading.
+- **Hyphenation and justified text.** That justified paragraphs are hyphenated
+  with the device's dictionary, and that this does not fight a user style tweak
+  that turns hyphenation off.
+- **Code blocks.** A Rust or Postgres article with a wide `pre` block: lines
+  should wrap rather than run off the page, and a block should not split across
+  a page break.
+- **Wide tables** take the screen width at the smaller size instead of being
+  clipped.
+- **Night mode.** Rules, table borders and code backgrounds should be visible
+  but not muddy in inverted mode.
+- **The failure dialog.** Force a failure (revoke the key's `Assets: Read` scope
+  and download a PDF) and confirm the second dialog names the article and
+  suggests the scope.
 
 Still unverified, and worth doing on a real Kobo:
 

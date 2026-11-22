@@ -15,22 +15,39 @@ local ArticleUtil = require("articleutil")
 
 local EpubBuilder = {}
 
+-- Restraint here is deliberate, and it is the whole reason this file is short.
+--
+-- crengine applies the reader's own style tweaks on top of an EPUB, and the
+-- font, size, line spacing and margins belong to the person holding the device.
+-- A stylesheet that sets them fights every one of their choices, and the fight
+-- is invisible to whoever wrote the CSS: it looks fine on a desktop preview at
+-- one font size. So no font sizes on body text, no margins on body, no fixed
+-- colours that assume a white page.
+--
+-- What is set is what crengine cannot infer and what goes visibly wrong without
+-- it: hyphenation under justified text, pagination rules for things that must
+-- not be split, wrapping for long code tokens, tables that fit the screen, and
+-- greys that survive night mode because they are translucent rather than fixed.
 local CSS = [[
-body { margin: 0; padding: 0; font-family: serif; text-align: justify; }
+body { margin: 0; padding: 0; font-family: serif; text-align: justify;
+       -epub-hyphens: auto; hyphens: auto; }
 h1 { font-size: 1.4em; text-align: left; margin: 0 0 0.2em 0; }
-h2, h3, h4, h5, h6 { text-align: left; margin: 1em 0 0.3em 0; }
+h2, h3, h4, h5, h6 { text-align: left; margin: 1em 0 0.3em 0; page-break-inside: avoid; }
 p { margin: 0 0 0.6em 0; text-indent: 0; }
 img { max-width: 100%; height: auto; text-align: center; }
-figure { margin: 0.8em 0; text-align: center; }
+figure { margin: 0.8em 0; text-align: center; page-break-inside: avoid; }
 figcaption { font-size: 0.8em; font-style: italic; text-align: center; }
-blockquote { margin: 0.6em 1.2em; font-style: italic; }
-pre { font-family: monospace; font-size: 0.85em; white-space: pre-wrap; margin: 0.6em 0; }
-code { font-family: monospace; font-size: 0.9em; }
-hr { border: 0; border-top: 1px solid #999; margin: 1em 0; }
-table { border-collapse: collapse; }
-td, th { border: 1px solid #999; padding: 0.2em 0.4em; }
+blockquote { margin: 0.6em 1.2em; font-style: italic; background: rgba(127,127,127,.12); }
+pre { font-family: monospace; font-size: 0.85em; white-space: pre-wrap;
+      word-wrap: break-word; text-align: left; margin: 0.6em 0;
+      page-break-inside: avoid; }
+code { font-family: monospace; font-size: 0.9em; background: rgba(127,127,127,.12); }
+hr { border: 0; border-top: 1px solid rgba(127,127,127,.35); margin: 1em 0; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9em; page-break-inside: avoid; }
+td, th { border: 1px solid rgba(127,127,127,.35); padding: 0.2em 0.4em; }
 .kk-meta { font-size: 0.8em; margin: 0 0 1em 0; }
 .kk-note { font-size: 0.9em; font-style: italic; margin: 0 0 1em 0; }
+.kk-cover { margin: 0; padding: 0; text-align: center; }
 ]]
 
 -- Ceilings on image fetching. Every image body is held in memory until the zip
@@ -39,6 +56,11 @@ td, th { border: 1px solid #999; padding: 0.2em 0.4em; }
 -- take the whole of it. `max_images` caps how many, these cap how large.
 local MAX_IMAGE_BYTES = 2 * 1024 * 1024
 local MAX_IMAGE_TOTAL_BYTES = 8 * 1024 * 1024
+
+-- The cover is fetched on its own budget, not out of the article's: it is the
+-- one image you see before opening the article, so an article that has already
+-- spent its image allowance on inline pictures should still get its art.
+local MAX_COVER_BYTES = 2 * 1024 * 1024
 
 --- An ltn12 sink that collects into `t` and gives up past `max_bytes`.
 --
@@ -93,6 +115,82 @@ local function fetchUrl(url, max_bytes, block_timeout, total_timeout)
     end
 
     return table.concat(sink)
+end
+
+--- The cover page, as a document of its own.
+--
+-- A plain image in a centred div. The SVG wrapper some EPUB3 guides recommend
+-- exists so the cover scales without being resampled; crengine scales a plain
+-- <img> to the screen anyway, and the wrapper is one more thing for the XML to
+-- get wrong, so it buys nothing here.
+--
+-- Not run through getBalancedHTML(): this is generated rather than crawled, so
+-- it is already well-formed and the balancer has nothing to fix.
+--
+-- @tparam string href Image path inside OEBPS, e.g. "images/cover.png".
+-- @treturn string XHTML document.
+function EpubBuilder.coverXhtml(href)
+    return table.concat({
+        [[<?xml version="1.0" encoding="UTF-8"?>]],
+        [[<html xmlns="http://www.w3.org/1999/xhtml">]],
+        "<head>",
+        "<title>Cover</title>",
+        [[<link rel="stylesheet" type="text/css" href="stylesheet.css"/>]],
+        "</head>",
+        [[<body><div class="kk-cover"><img src="]] .. ArticleUtil.escapeXml(href)
+            .. [[" alt="Cover"/></div></body>]],
+        "</html>",
+    }, "\n")
+end
+
+--- Fetch a bookmark's cover art, if it has any and it really is an image.
+--
+-- Silent by design: a cover is decoration, and an article whose lead image is
+-- missing, over budget, or not an image at all is still worth reading. What
+-- went wrong is logged at debug level, which is where to look when a shelf of
+-- articles looks bare.
+--
+-- @tparam table bookmark
+-- @tparam table opts See build().
+-- @treturn table|nil { path = "images/cover.png", media_type = …, data = … }.
+local function fetchCover(bookmark, opts)
+    local sources = ArticleUtil.coverSources(bookmark.content)
+    if #sources == 0 then return nil end
+
+    local max_bytes = opts.max_cover_bytes or MAX_COVER_BYTES
+
+    for _, source in ipairs(sources) do
+        local data, why
+
+        if source.kind == "asset" then
+            -- The asset lives behind the API, so the fetch has to come from the
+            -- caller: this module never carries a token. Without a fetcher the
+            -- URL source below is still tried.
+            if opts.fetch_asset then
+                data = opts.fetch_asset(source.asset_id, max_bytes)
+            else
+                why = "no asset fetcher supplied"
+            end
+        else
+            data, why = fetchUrl(source.url, max_bytes,
+                opts.cover_block_timeout, opts.cover_total_timeout)
+        end
+
+        -- Sniff rather than trust either source: imageUrl is whatever the page
+        -- declared it to be, and an asset id can point at anything at all.
+        local media_type = data and ArticleUtil.sniffImageType(data)
+        if data and media_type and #data <= max_bytes then
+            return {
+                path = "images/cover" .. ArticleUtil.extensionForMediaType(media_type),
+                media_type = media_type,
+                data = data,
+            }
+        end
+
+        logger.dbg("Karaoke: no cover from", source.kind, media_type or why or "not an image")
+    end
+
+    return nil
 end
 
 --- Convert markdown to the small subset of HTML we need.
@@ -218,7 +316,25 @@ function EpubBuilder.buildDocument(bookmark, body_html)
     return table.concat(parts, "\n")
 end
 
-local function opf(bookmark, title, images)
+--- The package document. EPUB 2.0, which is what crengine reads and what
+-- KOReader's own news downloader writes.
+--
+-- The cover is declared the EPUB 2 way: a manifest item plus
+-- <meta name="cover" content="cover-img"/>. EPUB 3 replaced that meta with
+-- properties="cover-image" on the manifest item, and adding that property here
+-- would make the package claim two things at once: format readers disagree
+-- about which wins, and the property is not valid on a 2.0 package. So the
+-- package version stays 2.0 and only the 2.0 spelling is used.
+--
+-- Exposed rather than local so the specs can assert the package's structure
+-- without crengine or libarchive; see spec/epubbuilder_spec.lua.
+--
+-- @tparam table bookmark
+-- @tparam string title
+-- @tparam table images Array of { path, media_type }.
+-- @tparam table|nil cover { path, media_type }.
+-- @treturn string
+function EpubBuilder.opf(bookmark, title, images, cover)
     local content = bookmark.content or {}
     local parts = {
         [[<?xml version="1.0" encoding="UTF-8"?>]],
@@ -226,7 +342,7 @@ local function opf(bookmark, title, images)
         [[<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">]],
         "<dc:title>" .. ArticleUtil.escapeXml(title) .. "</dc:title>",
         "<dc:identifier id=\"bookid\">urn:karakeep:" .. ArticleUtil.escapeXml(bookmark.id) .. "</dc:identifier>",
-        "<dc:language>en</dc:language>",
+        "<dc:language>" .. ArticleUtil.escapeXml(ArticleUtil.language(bookmark)) .. "</dc:language>",
     }
 
     if content.author and content.author ~= "" then
@@ -247,9 +363,20 @@ local function opf(bookmark, title, images)
         end
     end
 
+    if cover then
+        -- id="cover-img" is what <meta name="cover"> refers to; the two have to
+        -- agree, and nothing else may claim that id.
+        table.insert(parts, [[<meta name="cover" content="cover-img"/>]])
+    end
+
     table.insert(parts, "</metadata>")
     table.insert(parts, "<manifest>")
     table.insert(parts, [[<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>]])
+    if cover then
+        table.insert(parts, string.format('<item id="cover-img" href="%s" media-type="%s"/>',
+            ArticleUtil.escapeXml(cover.path), cover.media_type))
+        table.insert(parts, [[<item id="cover-page" href="cover.xhtml" media-type="application/xhtml+xml"/>]])
+    end
     table.insert(parts, [[<item id="content" href="content.xhtml" media-type="application/xhtml+xml"/>]])
     table.insert(parts, [[<item id="css" href="stylesheet.css" media-type="text/css"/>]])
 
@@ -259,23 +386,85 @@ local function opf(bookmark, title, images)
     end
 
     table.insert(parts, "</manifest>")
-    table.insert(parts, [[<spine toc="ncx"><itemref idref="content"/></spine>]])
+
+    -- The cover comes first and is linear, so opening an article shows its art
+    -- and reading runs on into the text from there. Some readers jump straight
+    -- to the guide's "text" reference instead, which is why that is declared
+    -- too rather than left implicit in the spine order.
+    table.insert(parts, '<spine toc="ncx">')
+    if cover then
+        table.insert(parts, [[<itemref idref="cover-page" linear="yes"/>]])
+    end
+    table.insert(parts, [[<itemref idref="content"/>]])
+    table.insert(parts, "</spine>")
+
+    table.insert(parts, "<guide>")
+    if cover then
+        table.insert(parts, [[<reference type="cover" title="Cover" href="cover.xhtml"/>]])
+    end
+    table.insert(parts, string.format('<reference type="text" title="%s" href="content.xhtml"/>',
+        ArticleUtil.escapeXml(title)))
+    table.insert(parts, "</guide>")
+
     table.insert(parts, "</package>")
 
     return table.concat(parts, "\n")
 end
 
-local function ncx(bookmark, title)
-    return table.concat({
+--- The table of contents, as an EPUB 2 NCX.
+--
+-- One navPoint per h2 and one per h3, nested under the h2 above it; see
+-- ArticleUtil.tocFromHeadings(). The article title is always the first entry,
+-- pointing at the start of the document, so an article with no headings at all
+-- still has a contents list with something in it.
+--
+-- Exposed for the specs, like opf().
+--
+-- @tparam table bookmark
+-- @tparam string title
+-- @tparam table toc From ArticleUtil.tocFromHeadings().
+-- @treturn string
+function EpubBuilder.ncx(bookmark, title, toc)
+    local parts = {
         [[<?xml version="1.0" encoding="UTF-8"?>]],
         [[<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">]],
         [[<head><meta name="dtb:uid" content="urn:karakeep:]] .. ArticleUtil.escapeXml(bookmark.id) .. [["/></head>]],
         "<docTitle><text>" .. ArticleUtil.escapeXml(title) .. "</text></docTitle>",
-        [[<navMap><navPoint id="navpoint-1" playOrder="1">]],
-        "<navLabel><text>" .. ArticleUtil.escapeXml(title) .. "</text></navLabel>",
-        [[<content src="content.xhtml"/>]],
-        [[</navPoint></navMap></ncx>]],
-    }, "\n")
+        "<navMap>",
+    }
+
+    -- playOrder has to increase through the whole flat sequence, nested entries
+    -- included: it describes reading order, not position in the tree.
+    local play_order = 0
+
+    local function nav_point(entry, indent)
+        play_order = play_order + 1
+        table.insert(parts, string.format('%s<navPoint id="navpoint-%d" playOrder="%d">',
+            indent, play_order, play_order))
+        table.insert(parts, string.format('%s  <navLabel><text>%s</text></navLabel>',
+            indent, ArticleUtil.escapeXml(entry.text)))
+        table.insert(parts, string.format('%s  <content src="content.xhtml#%s"/>',
+            indent, ArticleUtil.escapeXml(entry.id)))
+        for _, child in ipairs(entry.children or {}) do
+            nav_point(child, indent .. "  ")
+        end
+        table.insert(parts, indent .. "</navPoint>")
+    end
+
+    play_order = play_order + 1
+    table.insert(parts, string.format('<navPoint id="navpoint-%d" playOrder="%d">',
+        play_order, play_order))
+    table.insert(parts, "  <navLabel><text>" .. ArticleUtil.escapeXml(title) .. "</text></navLabel>")
+    table.insert(parts, [[  <content src="content.xhtml"/>]])
+    table.insert(parts, "</navPoint>")
+
+    for _, entry in ipairs(toc or {}) do
+        nav_point(entry, "")
+    end
+
+    table.insert(parts, "</navMap></ncx>")
+
+    return table.concat(parts, "\n")
 end
 
 --- Build an EPUB for a bookmark and write it to disk.
@@ -287,6 +476,12 @@ end
 --   include_images         download and embed images
 --   max_images             cap on how many images are embedded
 --   max_image_bytes_total  cap on their combined size, in bytes
+--   include_covers         fetch and embed the bookmark's cover art (default on)
+--   max_cover_bytes        cap on the cover's size, in bytes
+--   fetch_asset            optional function(asset_id, max_bytes) returning the
+--                          bytes of a Karakeep asset, or nil. Needed for covers
+--                          that only exist as an asset, since the token lives in
+--                          the API client rather than here.
 --   progress               optional function(message) for UI feedback; return
 --                          false from it to abandon the build
 -- @treturn bool ok
@@ -365,7 +560,22 @@ function EpubBuilder.build(bookmark, filepath, opts)
         end)
     end
 
+    -- Cover art before the archive is opened, for the same reason as the inline
+    -- images: the manifest has to know whether there is one before the OPF is
+    -- written, and an archive entry can only be written once.
+    local cover
+    if opts.include_covers ~= false then
+        cover = fetchCover(bookmark, opts)
+    end
+
     local document = EpubBuilder.buildDocument(bookmark, body_html)
+
+    -- Stable ids on the headings, collected on the way, so the NCX can point at
+    -- them. Done after buildDocument() because that is where the body is
+    -- assembled, and before balancing so crengine keeps the attributes.
+    local with_ids, headings = ArticleUtil.assignHeadingIds(document)
+    local toc = ArticleUtil.tocFromHeadings(headings)
+    document = with_ids
 
     -- Assemble the whole document before balancing it. getBalancedHTML() parses
     -- a complete HTML document and returns nothing at all for a bare fragment,
@@ -431,15 +641,22 @@ function EpubBuilder.build(bookmark, filepath, opts)
 
     addEntry("OEBPS/stylesheet.css", CSS)
     addEntry("OEBPS/content.xhtml", xhtml)
-    addEntry("OEBPS/content.opf", opf(bookmark, title, images))
-    addEntry("OEBPS/toc.ncx", ncx(bookmark, title))
+    if cover then
+        addEntry("OEBPS/cover.xhtml", EpubBuilder.coverXhtml(cover.path))
+    end
+    addEntry("OEBPS/content.opf", EpubBuilder.opf(bookmark, title, images, cover))
+    addEntry("OEBPS/toc.ncx", EpubBuilder.ncx(bookmark, title, toc))
 
     -- Already-compressed formats gain nothing from deflate, and the Kobo's CPU
     -- is slow enough that it is worth skipping.
     writer:setZipCompression("store")
+    if cover then
+        addEntry("OEBPS/" .. cover.path, cover.data)
+        cover.data = nil -- release as we go
+    end
     for _, image in ipairs(images) do
         addEntry("OEBPS/" .. image.path, image_data[image.path])
-        image_data[image.path] = nil -- release as we go
+        image_data[image.path] = nil
     end
 
     writer:close()

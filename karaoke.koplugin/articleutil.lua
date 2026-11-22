@@ -640,6 +640,14 @@ local MEDIA_TYPES = {
     [".webp"] = "image/webp", [".svg"] = "image/svg+xml", [".bmp"] = "image/bmp",
 }
 
+-- The same mapping read the other way, for images whose type came from their
+-- bytes rather than from a URL. Derived rather than written out twice: two
+-- copies of this table would eventually disagree.
+local EXT_FOR_MEDIA_TYPE = {}
+for ext, media_type in pairs(MEDIA_TYPES) do
+    EXT_FOR_MEDIA_TYPE[media_type] = ext
+end
+
 --- Map a local image path to its EPUB media type.
 -- @tparam string path
 -- @treturn string
@@ -664,6 +672,123 @@ function ArticleUtil.sniffImageType(data)
     if data:match("^%s*<%?xml") or data:match("^%s*<svg") then return "image/svg+xml" end
 
     return nil
+end
+
+--- Filename extension for a media type sniffed from image bytes.
+--
+-- The extension has to agree with the declared media type, and that type comes
+-- from the bytes: a URL ending in .jpg that serves a PNG must be stored as .png,
+-- or crengine refuses the image. See sniffImageType().
+--
+-- @tparam string|nil media_type e.g. "image/png".
+-- @treturn string Extension including the dot, defaulting to .jpg.
+function ArticleUtil.extensionForMediaType(media_type)
+    return EXT_FOR_MEDIA_TYPE[media_type] or ".jpg"
+end
+
+--- Where a bookmark's cover art may come from, best first.
+--
+-- Karakeep holds the lead image twice: as an asset it serves itself, and as the
+-- URL its crawler found on the page. The asset wins because it keeps working
+-- after the original site drops the picture, and it is the image Karakeep's own
+-- interface shows -- but fetching it needs the "Assets: Read" scope on the API
+-- key, so the URL is a real fallback rather than a nicety.
+--
+-- A data: URI is not offered as a source: the bytes would have to be base64
+-- decoded, and sniffing the result is what decides whether it is usable at all.
+--
+-- @tparam table|nil content A bookmark's content table.
+-- @treturn table Array of 0, 1 or 2 sources: { kind = "asset", asset_id = … } or
+--   { kind = "url", url = … }.
+function ArticleUtil.coverSources(content)
+    if type(content) ~= "table" then return {} end
+
+    local sources = {}
+
+    if type(content.imageAssetId) == "string" and content.imageAssetId ~= "" then
+        table.insert(sources, { kind = "asset", asset_id = content.imageAssetId })
+    end
+
+    if type(content.imageUrl) == "string" and content.imageUrl:match("^[hH][tT][tT][pP][sS]?://") then
+        table.insert(sources, { kind = "url", url = content.imageUrl })
+    end
+
+    return sources
+end
+
+--- Give every h2 and h3 an id, and list them for the table of contents.
+--
+-- The ids are numbered rather than derived from the heading text. A slug would
+-- collide on repeated headings ("Notes" twice in one article is normal) and
+-- would move whenever a heading was edited, and nothing needs the id to be
+-- readable -- only for the NCX and the document to agree. Numbering in document
+-- order also means rebuilding an article produces the same ids, so a re-download
+-- is not a different document to anything that cached the old one.
+--
+-- An id the page already had is kept: in-page links in the article point at it.
+--
+-- @tparam string|nil html
+-- @treturn string HTML with ids on its headings.
+-- @treturn table Array of { level = 2|3, id = …, text = … } in document order.
+function ArticleUtil.assignHeadingIds(html)
+    if type(html) ~= "string" then return "", {} end
+
+    local headings, number = {}, 0
+
+    local rewritten = html:gsub("<%s*[hH]([23])([^>]*)>(.-)<%s*/%s*[hH]%1%s*>",
+        function(level, attrs, inner)
+            number = number + 1
+
+            local id = attribute(attrs, "id")
+            if not id then
+                id = "kk-s" .. number
+                attrs = attrs .. string.format(' id="%s"', id)
+            end
+
+            -- Plain text for the contents list: a heading holding <em> or a
+            -- link would otherwise arrive as markup in the NCX.
+            local text = ArticleUtil.trimPartialUtf8(ArticleUtil.htmlToText(inner):sub(1, 200))
+            if text == "" then text = "…" end
+
+            table.insert(headings, { level = tonumber(level), id = id, text = text })
+
+            return string.format("<h%s%s>%s</h%s>", level, attrs, inner, level)
+        end)
+
+    return rewritten, headings
+end
+
+--- Arrange headings into a table-of-contents tree.
+--
+-- One level of nesting, and only that: an h3 belongs under the h2 above it,
+-- which is the shape an article's structure actually has. An h3 with no h2
+-- before it stays top-level rather than being dropped -- a heading that exists
+-- in the text and nowhere in the contents is worse than a flat entry.
+--
+-- @tparam table|nil headings From assignHeadingIds().
+-- @treturn table Array of { id, text, level, children = { … } }.
+function ArticleUtil.tocFromHeadings(headings)
+    if type(headings) ~= "table" then return {} end
+
+    local toc, last_h2 = {}, nil
+
+    for _, heading in ipairs(headings) do
+        local entry = {
+            id = heading.id,
+            text = heading.text,
+            level = heading.level,
+            children = {},
+        }
+
+        if heading.level == 3 and last_h2 then
+            table.insert(last_h2.children, entry)
+        else
+            table.insert(toc, entry)
+            if heading.level == 2 then last_h2 = entry end
+        end
+    end
+
+    return toc
 end
 
 --- Where an article's text might come from, best first.
@@ -753,6 +878,93 @@ function ArticleUtil.displayText(value, fallback)
     if type(value) == "number" then return tostring(value) end
 
     return fallback
+end
+
+--- The dc:language for a bookmark's package.
+--
+-- This is not just a metadata line: crengine picks its hyphenation dictionary
+-- from it, so a wrong or missing language changes how the text is laid out on a
+-- narrow screen. Karakeep's crawler records a language only when the page said
+-- so, which is often not the case, hence the "en" default; and when it does
+-- record one it may be a full tag like "en-GB", which crengine understands.
+--
+-- Anything that is not shaped like a language tag is ignored rather than written
+-- into the package, where it would either be invalid or, worse, valid and wrong.
+--
+-- @tparam table|nil bookmark
+-- @treturn string
+function ArticleUtil.language(bookmark)
+    bookmark = type(bookmark) == "table" and bookmark or {}
+    local content = type(bookmark.content) == "table" and bookmark.content or {}
+
+    local function usable(value)
+        if type(value) ~= "string" then return nil end
+        return value:match("^%a%a?%a?[%w%-]*$")
+    end
+
+    return usable(content.language) or usable(bookmark.language) or "en"
+end
+
+--- Classify a finished sync, for the summary's headline.
+--
+-- "Downloaded 0 articles." is literally true in every one of these cases and
+-- useful in none of them: nothing was unread, everything was already on the
+-- device, articles were only tidied up, or the plugin was never configured.
+-- The counts are sorted into a kind here so that main.lua only has to choose
+-- wording, and so the choice itself is exercised by the specs.
+--
+-- @tparam table counts downloaded, skipped, failed, removed, fetched, configured
+-- @treturn string One of "not_configured", "downloaded", "cleaned_up",
+--   "failed", "all_present", "nothing_unread" or "nothing_new".
+function ArticleUtil.summaryKind(counts)
+    if type(counts) ~= "table" then return "nothing_new" end
+
+    if counts.configured == false then return "not_configured" end
+    if (counts.downloaded or 0) > 0 then return "downloaded" end
+    if (counts.removed or 0) > 0 then return "cleaned_up" end
+    if (counts.failed or 0) > 0 then return "failed" end
+    if (counts.skipped or 0) > 0 then return "all_present" end
+    if (counts.fetched or 0) == 0 then return "nothing_unread" end
+
+    return "nothing_new"
+end
+
+--- Sort a failure reason into something that can be acted on.
+--
+-- Reasons arrive from two places with different habits: downloadOriginal()
+-- writes sentences for the reader, while EpubBuilder.build() returns machine
+-- words because it has no gettext. Both are classified here, so that main.lua
+-- can show a sentence, and so that the one failure with a real fix attached --
+-- a 403, which on this API is nearly always a missing scope on the key -- can
+-- carry the advice.
+--
+-- @tparam string|nil reason
+-- @treturn string One of "no_content", "http_403", "http", "write",
+--   "unsupported", "not_configured", "network" or "unknown".
+function ArticleUtil.failureKind(reason)
+    if type(reason) ~= "string" or reason == "" then return "unknown" end
+
+    if reason == "no readable content" or reason == "no_content" then return "no_content" end
+    if reason == "not_configured" then return "not_configured" end
+    if reason == "network_error" then return "network" end
+    if reason == "unsupported file type" or reason == "missing file" then return "unsupported" end
+    if reason == "io_error" then return "write" end
+    if reason == "http_error" or reason == "json_error" then return "server" end
+
+    local status = reason:match("HTTP (%d%d%d)")
+    if status then
+        return status == "403" and "http_403" or "http"
+    end
+
+    if reason:find("zip_open_failed", 1, true)
+        or reason:find("could not write", 1, true)
+        or reason:find("archive is only", 1, true)
+        or reason:find("rename_failed", 1, true)
+        or reason:find("could not save", 1, true) then
+        return "write"
+    end
+
+    return "unknown"
 end
 
 --- Replace JSON nulls with nil throughout a decoded response.

@@ -6,5 +6,5 @@ return {
     -- "KaraKo" up to 0.8.0, which is the release that renamed it.
     fullname = _("Karaoke (Karakeep reader)"),
     description = _([[Downloads unread Karakeep articles for offline reading, saves uploaded PDFs and images unchanged, adds links from the device, and sends read status, tags and highlights back.]]),
-    version = "0.8.1",
+    version = "0.9.0",
 }
