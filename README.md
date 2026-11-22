@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.svg" width="120" height="120" alt="KaraKo">
+  <img src="docs/logo.svg" width="120" height="120" alt="Karaoke">
 </p>
 
 <h1 align="center">karaoke</h1>
@@ -19,6 +19,8 @@
 > [!NOTE]
 > **This is a fork of [`davepwsmith/KaraKo`](https://github.com/davepwsmith/KaraKo),**
 > maintained at [`shrirambalaji/karaoke`](https://github.com/shrirambalaji/karaoke).
+> Upstream is still called KaraKo; from 0.8.0 this fork is called Karaoke
+> throughout, including the plugin folder and its settings file.
 >
 > Upstream KaraKo syncs articles and nothing else. This fork keeps all of that
 > and adds **the features `wallabag.koplugin` has that KaraKo did not**, plus
@@ -39,7 +41,7 @@ Read your [Karakeep](https://karakeep.app) library on a Kobo, via
 [KOReader](https://koreader.rocks) — the way `wallabag.koplugin` already lets
 people read their Wallabag library there.
 
-`karako.koplugin` syncs unread bookmarks onto the device as EPUBs, saves uploaded
+`karaoke.koplugin` syncs unread bookmarks onto the device as EPUBs, saves uploaded
 PDFs and images as they are, and pushes your read status and highlights back to
 Karakeep when you are done with them.
 
@@ -76,7 +78,7 @@ Everything `wallabag.koplugin` does that upstream KaraKo did not, plus PDFs:
 | PDFs and other uploaded originals, saved unchanged | `download_originals`, `max_original_mb` |
 | Only download favourites | `only_favourited` |
 | Ignore articles by tag | `ignore_tags` |
-| Add an article from the reader, with an offline queue | **KaraKo → Add an article** |
+| Add an article from the reader, with an offline queue | **Karaoke → Add an article** |
 | Move finished articles to an archive folder instead of deleting | `archive_directory` |
 | Delete in Karakeep instead of archiving | `remote_delete_instead_of_archive` |
 | Send the review note as tags | `send_review_as_tags` |
@@ -120,11 +122,11 @@ misplaced.
 
 ### Adding articles from the reader
 
-**KaraKo → Add an article** takes a link and saves it to Karakeep without
-touching a phone. Offline, the link is queued in `karako_queue.lua` and sent by
+**Karaoke → Add an article** takes a link and saves it to Karakeep without
+touching a phone. Offline, the link is queued in `karaoke_queue.lua` and sent by
 the next sync — at the *start* of the sync, so a link added a minute ago can be
 downloaded in the same run. Both adding and flushing the queue are bindable as
-gestures (**Settings → Gestures**), as `karako_add` and `karako_upload_queue`.
+gestures (**Settings → Gestures**), as `karaoke_add` and `karaoke_upload_queue`.
 
 ### Archiving, deleting, and keeping finished articles
 
@@ -204,34 +206,67 @@ one if you lose the Kobo.
 
 ## Install
 
-Download `karako.koplugin-vX.Y.Z.zip` from the
-[latest release](https://github.com/davepwsmith/karako/releases/latest) and
+Download `karaoke.koplugin-vX.Y.Z.zip` from the
+[latest release](https://github.com/shrirambalaji/karaoke/releases/latest) and
 unzip it into KOReader's `plugins` directory. The zip contains the
-`karako.koplugin/` folder itself, so there is nothing to rearrange:
+`karaoke.koplugin/` folder itself, so there is nothing to rearrange:
 
 ```sh
-unzip karako.koplugin-v0.6.0.zip -d /mnt/onboard/.adds/koreader/plugins/
+unzip karaoke.koplugin-v0.6.0.zip -d /mnt/onboard/.adds/koreader/plugins/
 ```
 
 Or from a clone, if you would rather:
 
 ```sh
-git clone https://github.com/davepwsmith/karako
-cp -r karako/karako.koplugin /mnt/onboard/.adds/koreader/plugins/
+git clone https://github.com/shrirambalaji/karaoke
+cp -r karaoke/karaoke.koplugin /mnt/onboard/.adds/koreader/plugins/
 ```
 
 Either way the destination is KOReader's `plugins` directory:
 
 | Device | Destination |
 | --- | --- |
-| Kobo | `/mnt/onboard/.adds/koreader/plugins/karako.koplugin/` |
-| Kindle | `/mnt/us/koreader/plugins/karako.koplugin/` |
-| Flatpak | `~/.var/app/rocks.koreader.KOReader/config/koreader/plugins/karako.koplugin/` |
-| AppImage | `~/.config/koreader/plugins/karako.koplugin/` |
-| Desktop / emulator | `<koreader>/plugins/karako.koplugin/` |
+| Kobo | `/mnt/onboard/.adds/koreader/plugins/karaoke.koplugin/` |
+| Kindle | `/mnt/us/koreader/plugins/karaoke.koplugin/` |
+| Flatpak | `~/.var/app/rocks.koreader.KOReader/config/koreader/plugins/karaoke.koplugin/` |
+| AppImage | `~/.config/koreader/plugins/karaoke.koplugin/` |
+| Desktop / emulator | `<koreader>/plugins/karaoke.koplugin/` |
 
-Restart KOReader. The plugin appears under **Tools → More tools → KaraKo**
+Restart KOReader. The plugin appears under **Tools → More tools → Karaoke**
 (the hamburger menu in the file manager).
+
+### Upgrading from KaraKo
+
+0.8.0 renamed the plugin from KaraKo to Karaoke, so the folder and the file names
+changed. Upgrading is a folder swap plus one clean-up:
+
+```sh
+unzip karaoke.koplugin-vX.Y.Z.zip -d /mnt/onboard/.adds/koreader/plugins/
+rm -rf /mnt/onboard/.adds/koreader/plugins/karako.koplugin
+```
+
+Leaving both folders in place installs the plugin twice, under two names, with
+two menu entries — so delete the old one rather than layering over it.
+
+Your settings come with you, on first start, with nothing to do:
+
+- `settings/karako.lua` — the server address, API key and every other setting —
+  is copied to `karaoke.lua`.
+- `karaoke.conf` is used from then on; an existing `karako.conf` is still read
+  as a fallback, so a device that seeded itself from one keeps its setup.
+- `karaoke_queue.lua` replaces `karako_queue.lua`; links already queued in the
+  old file are sent, not lost.
+
+**Gestures need re-binding.** The dispatcher action ids changed from `karako_*`
+to `karaoke_*`, so anything you bound under **Settings → Gestures** points at an
+id that no longer exists. Re-bind from the names you see in the list
+(`karaoke_sync`, `karaoke_add`, `karaoke_upload_queue`, …). Nothing rewrites
+them for you: a binding stores the id itself, so one pointing at `karako_sync`
+now just does nothing.
+
+Downloaded articles are untouched — filenames carry the Karakeep bookmark ID in
+an unchanged `[kk-id_…]` marker, not the plugin's name, so nothing is
+re-downloaded and nothing stops being archived.
 
 ### Flatpak and AppImage
 
@@ -241,7 +276,7 @@ inside its data directory, and that is where the plugin has to go:
 
 ```sh
 mkdir -p ~/.var/app/rocks.koreader.KOReader/config/koreader/plugins
-cp -r karako/karako.koplugin ~/.var/app/rocks.koreader.KOReader/config/koreader/plugins/
+cp -r karaoke/karaoke.koplugin ~/.var/app/rocks.koreader.KOReader/config/koreader/plugins/
 ```
 
 `datastorage.lua` picks that path whenever `FLATPAK`, `APPIMAGE` or
@@ -250,10 +285,10 @@ cp -r karako/karako.koplugin ~/.var/app/rocks.koreader.KOReader/config/koreader/
 `~/.var/app/rocks.koreader.KOReader/config`. Confirm the plugin was found with:
 
 ```sh
-flatpak run rocks.koreader.KOReader 2>&1 | grep -iE "Looking for plugins|karako"
+flatpak run rocks.koreader.KOReader 2>&1 | grep -iE "Looking for plugins|karaoke"
 ```
 
-You want two lines — the directory being scanned, and `Plugin loaded karako`.
+You want two lines — the directory being scanned, and `Plugin loaded karaoke`.
 
 One further Flatpak gotcha: the sandbox restricts filesystem access, so the
 **download folder must be somewhere KOReader can write**. Check what it is
@@ -266,7 +301,7 @@ flatpak override --user --filesystem=~/Books rocks.koreader.KOReader
 
 ## If a sync downloads nothing
 
-The most common cause is the download folder. Before fetching anything, KaraKo
+The most common cause is the download folder. Before fetching anything, Karaoke
 now checks that the folder exists — creating it if not — and that it can
 actually write there, and says so plainly if it cannot. Previously an unwritable
 folder surfaced only as every article failing to build, one line at a time, deep
@@ -283,14 +318,14 @@ flatpak override --user --filesystem=~/Books rocks.koreader.KOReader
 Anywhere under the data directory itself always works, because KOReader owns it:
 
 ```
-~/.var/app/rocks.koreader.KOReader/config/koreader/karako/
+~/.var/app/rocks.koreader.KOReader/config/koreader/karaoke/
 ```
 
 On a Kobo, somewhere under `/mnt/onboard` is both writable and visible to the
 native library.
 
 If the folder is fine and articles still fail, the sync summary now names the
-first reason, and the log has one line per failure tagged `KaraKo:`.
+first reason, and the log has one line per failure tagged `Karaoke:`.
 
 ## Seeing the log
 
@@ -316,16 +351,16 @@ quickest way to catch a stale install — the line numbers in a stack trace will
 not tell you:
 
 ```
-INFO  KaraKo: version 0.6.0, main.lua modified 2026-08-02 09:14:03, loaded from …/plugins/karako.koplugin
+INFO  Karaoke: version 0.6.0, main.lua modified 2026-08-02 09:14:03, loaded from …/plugins/karaoke.koplugin
 ```
 
 If that timestamp is older than your last `cp`, KOReader is running the previous
 copy. Delete the destination folder before copying over it.
 
-Lines from this plugin are tagged `KaraKo:`, and HTTP requests `KaraKoApi:`:
+Lines from this plugin are tagged `Karaoke:`, and HTTP requests `KaraokeApi:`:
 
 ```sh
-flatpak run rocks.koreader.KOReader -d 2>&1 | grep -iE "karako"
+flatpak run rocks.koreader.KOReader -d 2>&1 | grep -iE "karaoke"
 ```
 
 Note that on desktop platforms nothing redirects output to `crash.log`, unlike
@@ -333,28 +368,28 @@ on a Kobo or Kindle — stdout is the only place the log appears.
 
 ## Set up
 
-1. **KaraKo → Server.** Enter your server's base address (e.g.
+1. **Karaoke → Server.** Enter your server's base address (e.g.
    `https://karakeep.example.com`, or `http://192.168.1.10:3000` on a LAN) and
    your API key. `Save and test` reports whether the address and key work — a
    pasted `/api/v1` suffix is stripped for you.
-2. **KaraKo → Download folder.** Pick where articles should live. On a Kobo,
+2. **Karaoke → Download folder.** Pick where articles should live. On a Kobo,
    somewhere under `/mnt/onboard` keeps them visible in the native library too.
-3. **KaraKo → What to sync.** All unarchived bookmarks (the default), or a
+3. **Karaoke → What to sync.** All unarchived bookmarks (the default), or a
    single list or tag — the plugin fetches your lists and tags to choose from.
-4. **KaraKo → Synchronise now.**
+4. **Karaoke → Synchronise now.**
 
-You can bind *Synchronise KaraKo* to a gesture under
+You can bind *Synchronise Karaoke* to a gesture under
 **Settings → Gestures**.
 
 ### Setting up from a file instead
 
 Typing an API key on an e-reader keyboard is miserable, so settings can be read
-from a plain text file instead. **KaraKo → Settings file → Create an example
+from a plain text file instead. **Karaoke → Settings file → Create an example
 file** writes a commented one for you; edit it on a computer and use *Reload it
 now*, or just restart KOReader.
 
 ```ini
-# karako.conf
+# karaoke.conf
 server_url = https://karakeep.example.com
 api_token  = ak1_your_key_here
 directory  = /mnt/onboard/karakeep
@@ -364,12 +399,16 @@ download_images   = false
 archive_tag       = read-on-kobo
 ```
 
-Checked in this order, first found wins — **Settings file → Where KaraKo looks**
+Checked in this order, first found wins — **Settings file → Where Karaoke looks**
 shows the list with the active one ticked:
 
-1. `<koreader data dir>/karako.conf`
-2. `<koreader data dir>/settings/karako.conf`
-3. `karako.koplugin/karako.conf`, next to the plugin
+1. `<koreader data dir>/karaoke.conf`
+2. `<koreader data dir>/settings/karaoke.conf`
+3. `karaoke.koplugin/karaoke.conf`, next to the plugin
+
+Then those three paths again under the pre-0.8.0 name, `karako.conf`, so a file
+written before the rename still seeds. A `karaoke.conf` always wins where both
+exist, whichever location they are in.
 
 On Flatpak the data directory is
 `~/.var/app/rocks.koreader.KOReader/config/koreader`; on a Kobo it is
@@ -377,7 +416,7 @@ On Flatpak the data directory is
 
 Notes on how it behaves:
 
-- The file **seeds** settings the first time KaraKo runs. They then appear in the
+- The file **seeds** settings the first time Karaoke runs. They then appear in the
   menus like any other setting, and **whatever you set in the menus wins** from
   that point on.
 - Editing the file later does nothing by itself. Use **Settings file → Reload it
@@ -397,8 +436,8 @@ sync re-fetching your whole library each time. It also means an improvement to
 how EPUBs are built reaches only *new* articles, with no way to apply it to the
 ones you have short of deleting files by hand and guessing which were affected.
 
-**KaraKo → Rebuild all articles** re-fetches every article on the device and
-builds it again. Use it after upgrading KaraKo. It is also bindable as a gesture,
+**Karaoke → Rebuild all articles** re-fetches every article on the device and
+builds it again. Use it after upgrading Karaoke. It is also bindable as a gesture,
 under **Settings → Gestures**.
 
 - Read status and highlights are **sent to Karakeep first**, so nothing is lost
@@ -436,12 +475,12 @@ file. There is nothing to turn on and nothing to run; once the folder is
 consistent the check costs nothing and never fires again.
 
 Renaming an article yourself is fine, as long as the `[kk-id_…]` marker survives
-somewhere in the name. Remove it and KaraKo stops recognising the file: it will
+somewhere in the name. Remove it and Karaoke stops recognising the file: it will
 download the article again and will never archive it.
 
 ## Automatic syncing
 
-Off by default. **KaraKo → Sync when Wi-Fi connects** reacts to the network
+Off by default. **Karaoke → Sync when Wi-Fi connects** reacts to the network
 coming up — it never turns the radio on itself, which would be a bad trade on a
 device that spends most of its life asleep.
 
@@ -496,7 +535,7 @@ are worth knowing:
   still matches, so the highlight is treated as already present.
 - Highlighting the same passage twice on the device sends it once.
 
-If any of that bothers you, **KaraKo → Send highlights to Karakeep** turns the
+If any of that bothers you, **Karaoke → Send highlights to Karakeep** turns the
 whole thing off and nothing is written.
 
 ## How highlights are matched
@@ -575,7 +614,7 @@ mapped onto the four Karakeep supports; anything else becomes yellow.
   exceeds *Articles per sync*, every run is capped, so this cleanup never
   happens until the backlog drops below the limit.
 - **The API key is stored in the clear** in
-  `koreader/settings/karako.lua`, as KOReader has no keystore. It is worth
+  `koreader/settings/karaoke.lua`, as KOReader has no keystore. It is worth
   giving the device its own key so you can revoke just that one.
 
 ## Optionally, an OPDS bridge
@@ -601,7 +640,7 @@ make dist   # build the installable zip
 
 ### Cutting a release
 
-The version lives in `karako.koplugin/_meta.lua` and nowhere else. Bump it,
+The version lives in `karaoke.koplugin/_meta.lua` and nowhere else. Bump it,
 commit, then tag to match:
 
 ```sh
@@ -609,7 +648,7 @@ git tag v0.6.0 && git push origin v0.6.0
 ```
 
 `.github/workflows/release.yml` runs the checks and the specs, refuses the tag if
-it disagrees with `_meta.lua`, builds `karako.koplugin-v0.6.0.zip` and attaches
+it disagrees with `_meta.lua`, builds `karaoke.koplugin-v0.6.0.zip` and attaches
 it to a GitHub release with generated notes.
 
 `articleutil.lua` has no KOReader dependencies and carries the bulk of the fiddly

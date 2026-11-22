@@ -6,7 +6,7 @@ one on device. The approach follows newsdownloader.koplugin: hand the crawled
 HTML to crengine's getBalancedHTML() to make it well-formed, then write the
 container with ffi/archiver's zip writer.
 
-@module koplugin.karako.epubbuilder
+@module koplugin.karaoke.epubbuilder
 ]]
 
 local logger = require("logger")
@@ -348,7 +348,7 @@ function EpubBuilder.build(bookmark, filepath, opts)
             table.insert(images, { path = candidate.path, media_type = media_type })
             image_data[candidate.path] = data
         else
-            logger.dbg("KaraKo: dropping image", candidate.src,
+            logger.dbg("Karaoke: dropping image", candidate.src,
                 media_type or why or "unfetchable")
         end
     end
@@ -390,7 +390,7 @@ function EpubBuilder.build(bookmark, filepath, opts)
     if balanced_ok and balanced and balanced ~= "" then
         xhtml = balanced
     else
-        logger.warn("KaraKo: getBalancedHTML failed, writing unbalanced HTML for", bookmark.id)
+        logger.warn("Karaoke: getBalancedHTML failed, writing unbalanced HTML for", bookmark.id)
     end
 
     -- The XML declaration goes on afterwards: crengine does not emit one.

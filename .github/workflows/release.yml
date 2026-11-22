@@ -4,7 +4,7 @@
 #
 #     git tag v0.6.0 && git push origin v0.6.0
 #
-# The tag has to agree with the version in karako.koplugin/_meta.lua -- that is
+# The tag has to agree with the version in karaoke.koplugin/_meta.lua -- that is
 # what the plugin logs at startup to identify itself, so a release whose tag and
 # log line disagree would defeat the one reliable way to spot a stale install.
 # check-version fails the build rather than shipping that.
@@ -45,6 +45,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" \
-            karako.koplugin-*.zip \
+            karaoke.koplugin-*.zip \
             --title "${{ github.ref_name }}" \
             --generate-notes

@@ -7,7 +7,7 @@ seed the settings on first run, and are visible in the menus afterwards. What
 you then change in the menus wins: the file is not re-read unless you ask for it
 with "Reload it now".
 
-    # ~/.config/koreader/karako.conf
+    # ~/.config/koreader/karaoke.conf
     server_url = https://karakeep.example.com
     api_token  = ak1_abc123...
     directory  = /mnt/onboard/karakeep
@@ -16,7 +16,7 @@ with "Reload it now".
 
 No KOReader dependencies, so the parser is exercised by the specs.
 
-@module koplugin.karako.config
+@module koplugin.karaoke.config
 ]]
 
 local Config = {}
@@ -145,9 +145,9 @@ end
 -- @treturn string
 function Config.template()
     return table.concat({
-        "# KaraKo settings. Lines starting with # are ignored.",
+        "# Karaoke settings. Lines starting with # are ignored.",
         "#",
-        "# These seed KaraKo's settings the first time it runs, and then appear",
+        "# These seed Karaoke's settings the first time it runs, and then appear",
         "# in its menus. Changing a setting in the menu wins from then on; this",
         "# file is only read again if you choose \"Reload it now\".",
         "#",

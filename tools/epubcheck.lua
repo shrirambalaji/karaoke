@@ -21,7 +21,7 @@ local DataStorage = require("datastorage")
 G_reader_settings = require("luasettings"):open(
     DataStorage:getDataDir() .. "/settings.reader.lua")
 
-package.path = "plugins/karako.koplugin/?.lua;" .. package.path
+package.path = "plugins/karaoke.koplugin/?.lua;" .. package.path
 
 local cre = require("libs/libkoreader-cre")
 os.execute("mkdir -p /tmp/kk-crcache")

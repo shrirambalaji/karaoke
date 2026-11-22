@@ -33,7 +33,7 @@ That directory contains everything needed: `luajit`, `libs/libkoreader-cre.so`,
 `ffi/archiver.lua`, fonts, and a `plugins/` directory. Install the plugin with:
 
 ```sh
-cp -r /path/to/karako/karako.koplugin plugins/
+cp -r /path/to/karaoke/karaoke.koplugin plugins/
 ```
 
 ### Running the UI
@@ -53,13 +53,13 @@ Two messages are container noise and can be ignored: SDL's
 `XDG_RUNTIME_DIR is invalid or not set`, and `XIO: fatal IO error` when Xvfb is
 torn down at the end.
 
-Confirm the plugin loaded — the log line is `Plugin loaded karako`:
+Confirm the plugin loaded — the log line is `Plugin loaded karaoke`:
 
 ```sh
-./luajit reader.lua 2>&1 | grep -i karako
+./luajit reader.lua 2>&1 | grep -i karaoke
 ```
 
-It appears under **Tools → More tools → KaraKo**.
+It appears under **Tools → More tools → Karaoke**.
 
 ### Building from source instead
 
@@ -69,7 +69,7 @@ you. `kodev run` takes a device profile:
 ```sh
 git clone https://github.com/koreader/koreader && cd koreader
 ./kodev fetch-thirdparty && ./kodev build
-ln -s /path/to/karako/karako.koplugin \
+ln -s /path/to/karaoke/karaoke.koplugin \
       koreader-emulator-*/koreader/plugins/
 ./kodev run -s kobo-clara        # or kobo-forma, kobo-aura-one, kobo-h2o
 ```
@@ -89,7 +89,7 @@ starting the UI, and asserts on the result. Exits non-zero on failure.
 
 ```sh
 cd squashfs-root/usr/lib/koreader
-cp -r /path/to/karako/tools .
+cp -r /path/to/karaoke/tools .
 ./luajit tools/epubcheck.lua
 ```
 
@@ -113,7 +113,7 @@ cancelled build abandons the file rather than writing half of one.
 
 Verified against KOReader v2026.07:
 
-- The plugin loads (`Plugin loaded karako`) with `main.lua` initialising
+- The plugin loads (`Plugin loaded karaoke`) with `main.lua` initialising
   cleanly alongside 32 stock plugins.
 - Generated EPUBs open in `CreDocument`, render, and pass
   `validateAndFixToc(): TOC is fine`.

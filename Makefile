@@ -1,15 +1,15 @@
 LUA ?= $(shell command -v lua5.1 || command -v luajit || command -v lua)
 LUAC ?= $(shell command -v luac5.1 || command -v luac)
 
-PLUGIN_SOURCES := $(wildcard karako.koplugin/*.lua) $(wildcard spec/*.lua)
+PLUGIN_SOURCES := $(wildcard karaoke.koplugin/*.lua) $(wildcard spec/*.lua)
 # tools/ runs inside KOReader and must set G_reader_settings, which is a global
 # by KOReader's design, so it gets the syntax check but not the globals check.
 ALL_SOURCES := $(PLUGIN_SOURCES) $(wildcard tools/*.lua)
 
 # Single source of truth for the version: _meta.lua, which is also what the
 # plugin logs at startup to identify itself.
-VERSION := $(shell sed -n 's/.*version = "\([^"]*\)".*/\1/p' karako.koplugin/_meta.lua)
-DIST := karako.koplugin-v$(VERSION).zip
+VERSION := $(shell sed -n 's/.*version = "\([^"]*\)".*/\1/p' karaoke.koplugin/_meta.lua)
+DIST := karaoke.koplugin-v$(VERSION).zip
 
 .PHONY: test check all dist check-version clean
 
@@ -36,18 +36,18 @@ check:
 	[ $$status -eq 0 ] && echo "check: $(words $(ALL_SOURCES)) files OK"; \
 	exit $$status
 
-# The release zip. Unzips to "karako.koplugin/", so it can be extracted straight
+# The release zip. Unzips to "karaoke.koplugin/", so it can be extracted straight
 # into KOReader's plugins directory with nothing to rearrange.
 #
-# Only *.lua is copied, deliberately: karako.conf may legitimately sit next to
+# Only *.lua is copied, deliberately: karaoke.conf may legitimately sit next to
 # the plugin and holds an API token in plain text, so a glob that swept the
 # whole directory would publish somebody's key.
 dist: check test
 	@rm -rf build "$(DIST)"
-	@mkdir -p build/karako.koplugin
-	@cp karako.koplugin/*.lua build/karako.koplugin/
-	@cp LICENSE README.md build/karako.koplugin/
-	@cd build && zip -q -r "../$(DIST)" karako.koplugin
+	@mkdir -p build/karaoke.koplugin
+	@cp karaoke.koplugin/*.lua build/karaoke.koplugin/
+	@cp LICENSE README.md build/karaoke.koplugin/
+	@cd build && zip -q -r "../$(DIST)" karaoke.koplugin
 	@rm -rf build
 	@echo "built $(DIST):"
 	@unzip -Z1 "$(DIST)" | sed 's/^/  /'
@@ -59,8 +59,8 @@ check-version:
 	@test -n "$(TAG)" || { echo "usage: make check-version TAG=v1.2.3"; exit 1; }
 	@test "$(TAG)" = "v$(VERSION)" || { \
 		echo "tag $(TAG) does not match _meta.lua version $(VERSION)"; \
-		echo "update karako.koplugin/_meta.lua, or retag"; exit 1; }
+		echo "update karaoke.koplugin/_meta.lua, or retag"; exit 1; }
 	@echo "version: $(TAG) matches _meta.lua"
 
 clean:
-	@rm -rf build karako.koplugin-v*.zip
+	@rm -rf build karaoke.koplugin-v*.zip

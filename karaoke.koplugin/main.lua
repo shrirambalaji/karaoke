@@ -1,5 +1,5 @@
 --[[--
-KaraKo plugin for KOReader.
+Karaoke plugin for KOReader.
 
 Synchronises unread articles from a Karakeep server onto the device as EPUBs,
 and pushes read status and highlights back when you are done with them.
@@ -9,7 +9,7 @@ a different read-it-later service. The notable differences are that Karakeep has
 no EPUB export endpoint (so epubbuilder.lua assembles one on device) and that it
 does have a highlights API (so highlights.lua can push annotations back).
 
-@module koplugin.karako.main
+@module koplugin.karaoke.main
 ]]
 
 local DataStorage = require("datastorage")
@@ -37,49 +37,54 @@ local EpubBuilder = require("epubbuilder")
 local Highlights = require("highlights")
 local KarakeepApi = require("api")
 
--- Named "karako", not "karakeep": AlgusDark's karakeep.koplugin sends bookmarks
+-- Named "karaoke", not "karakeep": AlgusDark's karakeep.koplugin sends bookmarks
 -- and clippings to Karakeep, which is the opposite direction to this plugin, and
 -- the two are useful together. Sharing a plugin name, menu key or settings file
 -- would stop them coexisting.
-local KaraKo = WidgetContainer:extend{
-    name = "karako",
+--
+-- It was called "karako" until 0.8.0. That is the only reason the old name still
+-- appears anywhere in this plugin: openSettings(), queuePath() and configPaths()
+-- below look for the files a device already has under it, so that the rename does
+-- not cost anyone their token, their queued links or their config file.
+local Karaoke = WidgetContainer:extend{
+    name = "karaoke",
     is_doc_only = false,
 }
 
-function KaraKo:onDispatcherRegisterActions()
-    Dispatcher:registerAction("karako_sync", {
+function Karaoke:onDispatcherRegisterActions()
+    Dispatcher:registerAction("karaoke_sync", {
         category = "none",
-        event = "SynchronizeKarako",
-        title = _("Synchronise KaraKo"),
+        event = "SynchronizeKaraoke",
+        title = _("Synchronise Karaoke"),
         general = true,
     })
-    Dispatcher:registerAction("karako_redownload", {
+    Dispatcher:registerAction("karaoke_redownload", {
         category = "none",
-        event = "RedownloadKarako",
-        title = _("Rebuild all KaraKo articles"),
+        event = "RedownloadKaraoke",
+        title = _("Rebuild all Karaoke articles"),
         general = true,
     })
-    Dispatcher:registerAction("karako_go_to_directory", {
+    Dispatcher:registerAction("karaoke_go_to_directory", {
         category = "none",
-        event = "GoToKarakoDirectory",
-        title = _("Go to KaraKo folder"),
+        event = "GoToKaraokeDirectory",
+        title = _("Go to Karaoke folder"),
         general = true,
     })
-    Dispatcher:registerAction("karako_add", {
+    Dispatcher:registerAction("karaoke_add", {
         category = "none",
-        event = "AddKarakoArticle",
-        title = _("Add article to KaraKo"),
+        event = "AddKaraokeArticle",
+        title = _("Add article to Karaoke"),
         general = true,
     })
-    Dispatcher:registerAction("karako_upload_queue", {
+    Dispatcher:registerAction("karaoke_upload_queue", {
         category = "none",
-        event = "UploadKarakoQueue",
-        title = _("Upload queued articles to KaraKo"),
+        event = "UploadKaraokeQueue",
+        title = _("Upload queued articles to Karaoke"),
         general = true,
     })
 end
 
-function KaraKo:init()
+function Karaoke:init()
     self:logBuild()
     self.settings = self:openSettings()
     -- Before loadSettings(): a setting read with a default is written back as
@@ -97,7 +102,7 @@ end
 -- Following kosync.koplugin: the handler exists as a field only while the
 -- setting is on, so nothing is dispatched at all when it is off. Called again
 -- whenever the setting changes.
-function KaraKo:setupAutoSync()
+function Karaoke:setupAutoSync()
     self.onNetworkConnected = self.auto_sync and self._onNetworkConnected or nil
 end
 
@@ -106,13 +111,13 @@ end
 -- Only ever reacts to a connection the user made for their own reasons; it
 -- never turns the radio on, which would be a poor trade for battery on a device
 -- that is asleep most of the time.
-function KaraKo:_onNetworkConnected()
+function Karaoke:_onNetworkConnected()
     if not self:isReady() then return end
 
     local now = os.time()
     local interval = (self.auto_sync_interval or 30) * 60
     if self.last_auto_sync and (now - self.last_auto_sync) < interval then
-        logger.dbg("KaraKo: auto-sync skipped,", now - self.last_auto_sync, "s since the last one")
+        logger.dbg("Karaoke: auto-sync skipped,", now - self.last_auto_sync, "s since the last one")
         return
     end
 
@@ -129,10 +134,10 @@ function KaraKo:_onNetworkConnected()
             -- which goes stale on the server, and it needs no progress UI, so
             -- it will not interrupt reading. Downloads wait until you are out
             -- of the document.
-            logger.info("KaraKo: auto-sync (upload only, document open)")
+            logger.info("Karaoke: auto-sync (upload only, document open)")
             self:uploadStatuses(self:getLocalArticles(), true)
         else
-            logger.info("KaraKo: auto-sync (full)")
+            logger.info("Karaoke: auto-sync (full)")
             local Trapper = require("ui/trapper")
             Trapper:wrap(function() self:synchronize(true) end)
         end
@@ -144,12 +149,12 @@ end
 -- A stack trace gives line numbers, which are useless for telling a fixed copy
 -- from a stale one still sitting in the plugins directory. The path and the
 -- modification time of main.lua settle it immediately.
-function KaraKo:logBuild()
+function Karaoke:logBuild()
     local path = self.path or "?"
     local main_lua = ffiUtil.joinPath(path, "main.lua")
     local modified = lfs.attributes(main_lua, "modification")
 
-    logger.info(string.format("KaraKo: version %s, main.lua modified %s, loaded from %s",
+    logger.info(string.format("Karaoke: version %s, main.lua modified %s, loaded from %s",
         self.version or "?",
         modified and os.date("%Y-%m-%d %H:%M:%S", modified) or "?",
         path))
@@ -160,19 +165,29 @@ end
 -- The data directory first, because it survives replacing the plugin folder;
 -- next to the plugin second, because that is the folder you just copied over
 -- and the obvious place to look.
+--
+-- The names from before the 0.8.0 rename (karako.conf) come last as a whole
+-- group rather than beside their own directory: an install that still has one
+-- keeps seeding from it, but a stale karako.conf next to the plugin must not
+-- beat the karaoke.conf someone has just written into the data directory. Same
+-- reasoning that puts the data directory ahead of the plugin folder.
 -- @treturn table Array of paths.
-function KaraKo:configPaths()
+function Karaoke:configPaths()
     local data_dir = DataStorage:getDataDir()
+    local plugin_dir = self.path or "."
     return {
+        data_dir .. "/karaoke.conf",
+        data_dir .. "/settings/karaoke.conf",
+        ffiUtil.joinPath(plugin_dir, "karaoke.conf"),
         data_dir .. "/karako.conf",
         data_dir .. "/settings/karako.conf",
-        ffiUtil.joinPath(self.path or ".", "karako.conf"),
+        ffiUtil.joinPath(plugin_dir, "karako.conf"),
     }
 end
 
 --- Find a config file, if there is one.
 -- @treturn string|nil Path.
-function KaraKo:findConfigFile()
+function Karaoke:findConfigFile()
     for _, path in ipairs(self:configPaths()) do
         if lfs.attributes(path, "mode") == "file" then
             return path
@@ -190,7 +205,7 @@ end
 -- @treturn string|nil Path found.
 -- @treturn table Problems found in the file.
 -- @treturn number How many settings were actually seeded.
-function KaraKo:seedFromConfigFile()
+function Karaoke:seedFromConfigFile()
     local path = self:findConfigFile()
     if not path then return nil, {} , 0 end
 
@@ -212,10 +227,10 @@ function KaraKo:seedFromConfigFile()
     if seeded > 0 then self.settings:flush() end
 
     logger.info(string.format(
-        "KaraKo: seeded %d setting(s) from %s; %d already set on the device and left alone",
+        "Karaoke: seeded %d setting(s) from %s; %d already set on the device and left alone",
         seeded, path, kept))
     for _, problem in ipairs(problems) do
-        logger.warn("KaraKo: " .. path .. ": " .. problem)
+        logger.warn("Karaoke: " .. path .. ": " .. problem)
     end
 
     return path, problems, seeded
@@ -226,7 +241,7 @@ end
 -- @treturn string|nil Path applied.
 -- @treturn table Problems.
 -- @treturn number How many settings were applied.
-function KaraKo:reloadConfigFile()
+function Karaoke:reloadConfigFile()
     local path = self:findConfigFile()
     if not path then return nil, {}, 0 end
 
@@ -244,44 +259,78 @@ function KaraKo:reloadConfigFile()
     self:onFlushSettings()
     self:setupAutoSync()
 
-    logger.info("KaraKo: reloaded", applied, "settings from", path)
+    logger.info("Karaoke: reloaded", applied, "settings from", path)
     for _, problem in ipairs(problems) do
-        logger.warn("KaraKo: " .. path .. ": " .. problem)
+        logger.warn("Karaoke: " .. path .. ": " .. problem)
     end
 
     return path, problems, applied
 end
 
---- Open our settings, migrating from the name an earlier build used.
+--- Copy every setting the target does not already have, then flush.
 --
--- This plugin used to write settings/karakeep.lua, which is also the file
--- AlgusDark's karakeep.koplugin uses. Migration is therefore guarded on a key
--- only we write, so that an install of that plugin is never mistaken for our
--- own old settings and read in.
+-- Filling only unset keys is what makes the migrations below non-destructive: a
+-- value already on the device is the user's choice, and outranks whatever an
+-- old file happens to say. Copying rather than moving keeps a downgrade working,
+-- since the old file is left exactly where the earlier version looks for it.
+-- @tparam table from LuaSettings
+-- @tparam table to LuaSettings
+local function copyUnsetSettings(from, to)
+    for key, value in pairs(from.data or {}) do
+        if not to:has(key) then
+            to:saveSetting(key, value)
+        end
+    end
+    to:flush()
+end
+
+--- Open our settings, migrating from the names earlier builds used.
+--
+-- The names chain: settings/karakeep.lua was the oldest, migrated to
+-- settings/karako.lua, which this plugin wrote until 0.8.0 renamed it to
+-- settings/karaoke.lua. Each step is tried in turn, so a device that skipped an
+-- upgrade still arrives at the current file with its token intact.
+--
+-- Gated on server_url, because that is the one setting with no default: without
+-- it the plugin is unconfigured, and every other key is already written back by
+-- loadSettings() as a default once it has run. So an empty current file means
+-- "nothing configured yet", never "half a configuration we should ignore".
 -- @treturn table LuaSettings
-function KaraKo:openSettings()
+function Karaoke:openSettings()
     local settings_dir = DataStorage:getSettingsDir()
-    local settings = LuaSettings:open(settings_dir .. "/karako.lua")
+    local settings = LuaSettings:open(settings_dir .. "/karaoke.lua")
 
     if settings:readSetting("server_url") ~= nil then
         return settings -- already ours, nothing to do
     end
 
+    -- karako.lua, this plugin's own name until 0.8.0. No guard key is needed the
+    -- way there is one below: no other plugin has ever written that file, so
+    -- anything in it is ours. Tested for content rather than for existence
+    -- because LuaSettings:open() creates the file it was given, empty.
+    local previous = LuaSettings:open(settings_dir .. "/karako.lua")
+    if next(previous.data or {}) ~= nil then
+        logger.info("Karaoke: migrating settings from karako.lua to karaoke.lua")
+        copyUnsetSettings(previous, settings)
+        return settings
+    end
+
+    -- karakeep.lua, the name before that, which is also the file AlgusDark's
+    -- karakeep.koplugin uses. Migration is therefore guarded on a key only we
+    -- write, so that an install of that plugin is never mistaken for our own old
+    -- settings and read in.
     local legacy = LuaSettings:open(settings_dir .. "/karakeep.lua")
     if legacy:readSetting("articles_per_sync") == nil then
         return settings -- not ours: either absent, or another plugin's
     end
 
-    logger.info("KaraKo: migrating settings from karakeep.lua to karako.lua")
-    for key, value in pairs(legacy.data or {}) do
-        settings:saveSetting(key, value)
-    end
-    settings:flush()
+    logger.info("Karaoke: migrating settings from karakeep.lua to karaoke.lua")
+    copyUnsetSettings(legacy, settings)
 
     return settings
 end
 
-function KaraKo:loadSettings()
+function Karaoke:loadSettings()
     self.server_url = self.settings:readSetting("server_url", "")
     self.api_token = self.settings:readSetting("api_token", "")
     self.directory = self.settings:readSetting("directory")
@@ -321,7 +370,7 @@ function KaraKo:loadSettings()
     self.last_auto_sync = self.settings:readSetting("last_auto_sync")
 end
 
-function KaraKo:onFlushSettings()
+function Karaoke:onFlushSettings()
     if self.settings then
         self.settings:saveSetting("server_url", self.server_url)
         self.settings:saveSetting("api_token", self.api_token)
@@ -359,7 +408,7 @@ end
 -- One user-facing number, scaled: a slow connection needs a longer block
 -- timeout *and* a longer ceiling for the same request, and a file transfer
 -- needs both by a wider margin.
-function KaraKo:getApi()
+function Karaoke:getApi()
     local timeout = self.network_timeout or 20
     return KarakeepApi:new{
         server_url = self.server_url,
@@ -371,7 +420,7 @@ function KaraKo:getApi()
     }
 end
 
-function KaraKo:isReady()
+function Karaoke:isReady()
     return self.server_url ~= "" and self.api_token ~= "" and self.directory ~= nil
 end
 
@@ -379,14 +428,14 @@ end
 -- Menu
 --------------------------------------------------------------------------------
 
-function KaraKo:addToMainMenu(menu_items)
-    menu_items.karako = {
-        text = _("KaraKo"),
+function Karaoke:addToMainMenu(menu_items)
+    menu_items.karaoke = {
+        text = _("Karaoke"),
         sorting_hint = "more_tools",
         sub_item_table = {
             {
                 text = _("Synchronise now"),
-                callback = function() self:onSynchronizeKarako() end,
+                callback = function() self:onSynchronizeKaraoke() end,
             },
             {
                 text = _("Add an article"),
@@ -404,15 +453,15 @@ Saves a link to Karakeep without leaving the reader. With no connection the link
                     return T(N_("Upload queued articles: %1", "Upload queued articles: %1", queued), queued)
                 end,
                 keep_menu_open = true,
-                callback = function() self:onUploadKarakoQueue() end,
+                callback = function() self:onUploadKaraokeQueue() end,
             },
             {
                 text = _("Rebuild all articles"),
                 help_text = _([[
 Re-fetches every article on the device and builds it again, instead of skipping the ones already downloaded.
 
-Use this after upgrading KaraKo, to pick up an improvement to how EPUBs are built. Highlights and reading position are kept.]]),
-                callback = function() self:onRedownloadKarako() end,
+Use this after upgrading Karaoke, to pick up an improvement to how EPUBs are built. Highlights and reading position are kept.]]),
+                callback = function() self:onRedownloadKaraoke() end,
             },
             {
                 text = _("Send read status and highlights"),
@@ -433,8 +482,8 @@ Use this after upgrading KaraKo, to pick up an improvement to how EPUBs are buil
                 end,
             },
             {
-                text = _("Go to KaraKo folder"),
-                callback = function() self:onGoToKarakoDirectory() end,
+                text = _("Go to Karaoke folder"),
+                callback = function() self:onGoToKaraokeDirectory() end,
             },
             {
                 text = _("Server"),
@@ -447,9 +496,9 @@ Use this after upgrading KaraKo, to pick up an improvement to how EPUBs are buil
                     return _("Settings file: none")
                 end,
                 help_text = _([[
-Set up KaraKo from a text file instead of typing an API key on the device.
+Set up Karaoke from a text file instead of typing an API key on the device.
 
-The file seeds these settings the first time KaraKo runs. They then appear in these menus like any other, and whatever you set here wins from that point on.
+The file seeds these settings the first time Karaoke runs. They then appear in these menus like any other, and whatever you set here wins from that point on.
 
 Editing the file later does nothing by itself -- choose "Reload it now" to pull the changes in.]]),
                 separator = true,
@@ -652,7 +701,7 @@ When an article is archived, its review note is sent to Karakeep as tags, separa
     }
 end
 
-function KaraKo:describeScope()
+function Karaoke:describeScope()
     if self.sync_scope == "list" then
         return T(_("list '%1'"), self.scope_name or self.scope_id or "?")
     elseif self.sync_scope == "tag" then
@@ -661,7 +710,7 @@ function KaraKo:describeScope()
     return _("all unread")
 end
 
-function KaraKo:scopeMenu()
+function Karaoke:scopeMenu()
     return {
         {
             text = _("All unarchived bookmarks"),
@@ -688,7 +737,7 @@ function KaraKo:scopeMenu()
 end
 
 --- Fetch the available lists or tags from the server and let the user pick one.
-function KaraKo:chooseScope(kind, touchmenu_instance)
+function Karaoke:chooseScope(kind, touchmenu_instance)
     if self.server_url == "" or self.api_token == "" then
         UIManager:show(InfoMessage:new{ text = _("Configure the server first.") })
         return
@@ -748,10 +797,10 @@ function KaraKo:chooseScope(kind, touchmenu_instance)
 end
 
 --- Menu for the optional config file.
-function KaraKo:configFileMenu()
+function Karaoke:configFileMenu()
     return {
         {
-            text = _("Where KaraKo looks"),
+            text = _("Where Karaoke looks"),
             keep_menu_open = true,
             callback = function()
                 local lines = { _("Checked in order, first one found wins:"), "" }
@@ -793,8 +842,8 @@ function KaraKo:configFileMenu()
 end
 
 --- Write a commented example config file for the user to fill in.
-function KaraKo:writeConfigTemplate(touchmenu_instance)
-    local path = DataStorage:getDataDir() .. "/karako.conf"
+function Karaoke:writeConfigTemplate(touchmenu_instance)
+    local path = DataStorage:getDataDir() .. "/karaoke.conf"
 
     if lfs.attributes(path, "mode") == "file" then
         UIManager:show(InfoMessage:new{
@@ -818,7 +867,7 @@ function KaraKo:writeConfigTemplate(touchmenu_instance)
     if touchmenu_instance then touchmenu_instance:updateItems() end
 end
 
-function KaraKo:editServerSettings(touchmenu_instance)
+function Karaoke:editServerSettings(touchmenu_instance)
     local dialog
     dialog = MultiInputDialog:new{
         title = _("Karakeep server"),
@@ -832,7 +881,7 @@ function KaraKo:editServerSettings(touchmenu_instance)
                 text = self.api_token,
                 input_type = "string",
                 text_type = "password",
-                hint = _("API key (KaraKo: Settings > API Keys)"),
+                hint = _("API key (Karaoke: Settings > API Keys)"),
             },
         },
         buttons = {
@@ -861,7 +910,7 @@ function KaraKo:editServerSettings(touchmenu_instance)
     dialog:onShowKeyboard()
 end
 
-function KaraKo:testConnection()
+function Karaoke:testConnection()
     if self.server_url == "" or self.api_token == "" then
         UIManager:show(InfoMessage:new{ text = _("Both the server address and an API key are required.") })
         return
@@ -889,7 +938,7 @@ function KaraKo:testConnection()
     end)
 end
 
-function KaraKo:setArticlesPerSync(touchmenu_instance)
+function Karaoke:setArticlesPerSync(touchmenu_instance)
     UIManager:show(SpinWidget:new{
         title_text = _("Articles per sync"),
         info_text = _("The most recent unread articles are fetched, up to this many. Local copies are only tidied up when a sync sees everything, so a limit smaller than your unread count leaves them alone."),
@@ -905,7 +954,7 @@ function KaraKo:setArticlesPerSync(touchmenu_instance)
     })
 end
 
-function KaraKo:setArchiveTag(touchmenu_instance)
+function Karaoke:setArchiveTag(touchmenu_instance)
     local InputDialog = require("ui/widget/inputdialog")
     local dialog
     dialog = InputDialog:new{
@@ -934,7 +983,7 @@ function KaraKo:setArchiveTag(touchmenu_instance)
     dialog:onShowKeyboard()
 end
 
-function KaraKo:setDownloadDirectory(touchmenu_instance)
+function Karaoke:setDownloadDirectory(touchmenu_instance)
     require("ui/downloadmgr"):new{
         onConfirm = function(path)
             self.directory = path
@@ -944,7 +993,7 @@ function KaraKo:setDownloadDirectory(touchmenu_instance)
     }:chooseDir()
 end
 
-function KaraKo:setArchiveDirectory(touchmenu_instance)
+function Karaoke:setArchiveDirectory(touchmenu_instance)
     require("ui/downloadmgr"):new{
         onConfirm = function(path)
             self.archive_directory = path
@@ -955,7 +1004,7 @@ function KaraKo:setArchiveDirectory(touchmenu_instance)
 end
 
 --- Comma-separated list of tags to leave off the device.
-function KaraKo:setIgnoreTags(touchmenu_instance)
+function Karaoke:setIgnoreTags(touchmenu_instance)
     local InputDialog = require("ui/widget/inputdialog")
     local dialog
     dialog = InputDialog:new{
@@ -984,7 +1033,7 @@ function KaraKo:setIgnoreTags(touchmenu_instance)
     dialog:onShowKeyboard()
 end
 
-function KaraKo:setMaxOriginalMb(touchmenu_instance)
+function Karaoke:setMaxOriginalMb(touchmenu_instance)
     UIManager:show(SpinWidget:new{
         title_text = _("Largest original to download"),
         info_text = _("In megabytes. Uploaded PDFs are often much bigger than an article."),
@@ -1000,7 +1049,7 @@ function KaraKo:setMaxOriginalMb(touchmenu_instance)
     })
 end
 
-function KaraKo:setNetworkTimeout(touchmenu_instance)
+function Karaoke:setNetworkTimeout(touchmenu_instance)
     UIManager:show(SpinWidget:new{
         title_text = _("Network timeout"),
         info_text = _("Seconds to wait for the server. Downloads are given longer than API calls."),
@@ -1032,7 +1081,7 @@ local MAX_SCAN_DEPTH = 6
 -- @tparam[opt] table map
 -- @tparam[opt=0] number depth
 -- @treturn table
-function KaraKo:getLocalArticles(dir, map, depth)
+function Karaoke:getLocalArticles(dir, map, depth)
     dir = dir or self.directory
     map = map or {}
     depth = depth or 0
@@ -1053,7 +1102,7 @@ function KaraKo:getLocalArticles(dir, map, depth)
                 if depth < MAX_SCAN_DEPTH then
                     self:getLocalArticles(entry_path, map, depth + 1)
                 else
-                    logger.dbg("KaraKo: not descending past depth", MAX_SCAN_DEPTH, "at", entry_path)
+                    logger.dbg("Karaoke: not descending past depth", MAX_SCAN_DEPTH, "at", entry_path)
                 end
             end
         end
@@ -1078,7 +1127,7 @@ end
 --
 -- @tparam table local_articles Map of ID to path, updated in place.
 -- @treturn number Articles renamed.
-function KaraKo:renameLegacyArticles(local_articles)
+function Karaoke:renameLegacyArticles(local_articles)
     local legacy = {}
     for id, path in pairs(local_articles) do
         if ArticleUtil.hasLegacyName(path) then legacy[id] = path end
@@ -1105,7 +1154,7 @@ function KaraKo:renameLegacyArticles(local_articles)
         -- Leave anything ambiguous exactly as it is. A rename that does not
         -- happen costs nothing: the old name still resolves to the same ID.
         if target == path or lfs.attributes(target, "mode") then
-            logger.dbg("KaraKo: not renaming", path, "- target exists")
+            logger.dbg("Karaoke: not renaming", path, "- target exists")
         elseif os.rename(path, target) then
             DocSettings.updateLocation(path, target)
             ReadHistory:updateItem(path, target)
@@ -1113,12 +1162,12 @@ function KaraKo:renameLegacyArticles(local_articles)
             local_articles[id] = target
             renamed = renamed + 1
         else
-            logger.warn("KaraKo: could not rename", path, "to", target)
+            logger.warn("Karaoke: could not rename", path, "to", target)
         end
     end
 
     if renamed > 0 then
-        logger.info("KaraKo: renamed", renamed, "article(s) to put the title first")
+        logger.info("Karaoke: renamed", renamed, "article(s) to put the title first")
     end
 
     return renamed
@@ -1128,7 +1177,7 @@ end
 -- @tparam string path
 -- @tparam[opt] table doc_settings An already-open sidecar, to save reopening it.
 -- @treturn bool
-function KaraKo:isFinished(path, doc_settings)
+function Karaoke:isFinished(path, doc_settings)
     if not doc_settings and not DocSettings:hasSidecarFile(path) then
         return false -- never opened
     end
@@ -1148,7 +1197,7 @@ function KaraKo:isFinished(path, doc_settings)
     return false
 end
 
-function KaraKo:deleteLocalArticle(path)
+function Karaoke:deleteLocalArticle(path)
     if lfs.attributes(path, "mode") == "file" then
         -- deleteFile() takes care of the sidecar and the history entry too.
         FileManager:deleteFile(path, true)
@@ -1162,16 +1211,16 @@ end
 -- middle of the unread ones. A move that fails falls back to deleting.
 --
 -- @tparam string path
-function KaraKo:removeLocalArticle(path)
+function Karaoke:removeLocalArticle(path)
     -- Pulling the file out from under an open document is not survivable.
     if self.ui and self.ui.document and self.ui.document.file == path then
-        logger.info("KaraKo: not removing the document that is currently open:", path)
+        logger.info("Karaoke: not removing the document that is currently open:", path)
         return
     end
 
     if self.archive_directory and self.archive_directory ~= "" then
         if self:moveToArchiveDir(path, self.archive_directory) then return end
-        logger.warn("KaraKo: could not move", path, "to the archive folder - deleting instead")
+        logger.warn("Karaoke: could not move", path, "to the archive folder - deleting instead")
     end
 
     self:deleteLocalArticle(path)
@@ -1187,14 +1236,14 @@ end
 -- @tparam string path
 -- @tparam string archive_dir
 -- @treturn bool
-function KaraKo:moveToArchiveDir(path, archive_dir)
+function Karaoke:moveToArchiveDir(path, archive_dir)
     local mode = lfs.attributes(archive_dir, "mode")
     if not mode then
         util.makePath(archive_dir)
         mode = lfs.attributes(archive_dir, "mode")
     end
     if mode ~= "directory" then
-        logger.warn("KaraKo: archive folder is not usable:", archive_dir)
+        logger.warn("Karaoke: archive folder is not usable:", archive_dir)
         return false
     end
 
@@ -1219,7 +1268,7 @@ function KaraKo:moveToArchiveDir(path, archive_dir)
     ReadHistory:updateItem(path, new_path)
     ReadCollection:updateItem(path, new_path)
 
-    logger.info("KaraKo: moved", path, "to", new_path)
+    logger.info("Karaoke: moved", path, "to", new_path)
     return true
 end
 
@@ -1232,7 +1281,7 @@ end
 -- @tparam table api
 -- @tparam string id
 -- @tparam table doc_settings
-function KaraKo:sendReviewTags(api, id, doc_settings)
+function Karaoke:sendReviewTags(api, id, doc_settings)
     local summary = doc_settings:readSetting("summary")
     local note = summary and summary.note
     if type(note) ~= "string" or note == "" then return end
@@ -1248,11 +1297,11 @@ function KaraKo:sendReviewTags(api, id, doc_settings)
 
     if #tags == 0 then return end
 
-    logger.dbg("KaraKo: sending", #tags, "tag(s) from the review for", id)
+    logger.dbg("Karaoke: sending", #tags, "tag(s) from the review for", id)
     api:attachTags(id, tags)
 end
 
-function KaraKo:refreshFileManager()
+function Karaoke:refreshFileManager()
     if FileManager.instance then
         FileManager.instance:onRefresh()
     end
@@ -1273,7 +1322,7 @@ end
 -- attached. A build that fails leaves the copy already on the device untouched,
 -- because EpubBuilder assembles into a temporary file and only renames over the
 -- original once the whole archive is written.
-function KaraKo:onRedownloadKarako()
+function Karaoke:onRedownloadKaraoke()
     if not self:isReady() then
         UIManager:show(InfoMessage:new{
             text = _("Set the server address, API key and download folder first."),
@@ -1309,7 +1358,7 @@ Only articles still unarchived in Karakeep come back; anything archived there is
     return true
 end
 
-function KaraKo:onSynchronizeKarako()
+function Karaoke:onSynchronizeKaraoke()
     if not self:isReady() then
         UIManager:show(InfoMessage:new{
             text = _("Set the server address, API key and download folder first."),
@@ -1333,7 +1382,7 @@ end
 --
 -- @treturn bool ok
 -- @treturn string|nil Message explaining what is wrong.
-function KaraKo:checkDirectory()
+function Karaoke:checkDirectory()
     local dir = self.directory
 
     if not dir or dir == "" then
@@ -1345,10 +1394,10 @@ function KaraKo:checkDirectory()
         if not util.directoryExists(dir) then
             return false, T(_("The download folder does not exist, and could not be created:\n\n%1"), dir)
         end
-        logger.info("KaraKo: created download folder", dir)
+        logger.info("Karaoke: created download folder", dir)
     end
 
-    local probe = ffiUtil.joinPath(dir, ".karako-write-test")
+    local probe = ffiUtil.joinPath(dir, ".karaoke-write-test")
     local handle = io.open(probe, "w")
     if not handle then
         return false, T(_([[
@@ -1367,14 +1416,14 @@ flatpak info --show-permissions rocks.koreader.KOReader]]), dir)
     return true
 end
 
-function KaraKo:synchronize(quiet, force_redownload)
+function Karaoke:synchronize(quiet, force_redownload)
     local Trapper = require("ui/trapper")
     local api = self:getApi()
 
     local writable, problem = self:checkDirectory()
     if not writable then
         Trapper:reset()
-        logger.err("KaraKo: download folder unusable:", self.directory)
+        logger.err("Karaoke: download folder unusable:", self.directory)
         UIManager:show(InfoMessage:new{ text = problem })
         return
     end
@@ -1396,7 +1445,7 @@ function KaraKo:synchronize(quiet, force_redownload)
 
     Trapper:info(_("Fetching your Karakeep articles…"))
 
-    logger.info(string.format("KaraKo: syncing scope=%s%s limit=%d from %s",
+    logger.info(string.format("Karaoke: syncing scope=%s%s limit=%d from %s",
         self.sync_scope,
         self.scope_id and (":" .. self.scope_id) or "",
         self.articles_per_sync,
@@ -1404,7 +1453,7 @@ function KaraKo:synchronize(quiet, force_redownload)
 
     local remote, err, complete = self:fetchBookmarks(api)
     if not remote then
-        logger.err("KaraKo: fetch failed:", tostring(err))
+        logger.err("Karaoke: fetch failed:", tostring(err))
         Trapper:reset()
         UIManager:show(InfoMessage:new{
             text = err == "network_error" and _("Could not reach the Karakeep server.")
@@ -1436,7 +1485,7 @@ function KaraKo:synchronize(quiet, force_redownload)
                     and ArticleUtil.originalTitle(bookmark)
                     or (bookmark.title or content.title or content.url), _("Untitled"))
 
-            logger.dbg("KaraKo: downloading", bookmark.id, title)
+            logger.dbg("Karaoke: downloading", bookmark.id, title)
 
             local go_on = Trapper:info(T(_("Downloading %1 of %2:\n\n%3"), index, #remote, title))
             if not go_on then
@@ -1468,7 +1517,7 @@ function KaraKo:synchronize(quiet, force_redownload)
     end
 
     logger.info(string.format(
-        "KaraKo: sync done - %d fetched, %d downloaded, %d skipped, %d failed, %d removed (complete=%s cancelled=%s force=%s)",
+        "Karaoke: sync done - %d fetched, %d downloaded, %d skipped, %d failed, %d removed (complete=%s cancelled=%s force=%s)",
         #remote, downloaded, skipped, failed, removed,
         tostring(complete), tostring(cancelled), tostring(force_redownload or false)))
 
@@ -1518,7 +1567,7 @@ local MAX_BOOKMARK_PAGES = 10
 -- @treturn string|nil Error code.
 -- @treturn bool Whether the whole scope was seen, rather than cut off by the
 --   per-sync cap. Callers must not delete local files unless this is true.
-function KaraKo:fetchBookmarks(api)
+function Karaoke:fetchBookmarks(api)
     local bookmarks = {}
     local cursor = nil
     local pages = 0
@@ -1561,7 +1610,7 @@ function KaraKo:fetchBookmarks(api)
         -- Only a string can go into a query; buildQuery() drops anything else,
         -- and we would then re-request the first page for ever.
         if cursor ~= nil and type(cursor) ~= "string" then
-            logger.warn("KaraKo: ignoring a nextCursor of type", type(cursor))
+            logger.warn("Karaoke: ignoring a nextCursor of type", type(cursor))
             cursor = nil
         end
 
@@ -1569,7 +1618,7 @@ function KaraKo:fetchBookmarks(api)
         -- cursor. Reporting the scope as incomplete is what stops the caller
         -- deleting local files on the strength of a partial answer.
         if cursor and pages >= MAX_BOOKMARK_PAGES then
-            logger.warn("KaraKo: stopping after", pages, "pages with a cursor still set")
+            logger.warn("Karaoke: stopping after", pages, "pages with a cursor still set")
             return bookmarks, nil, false
         end
     until not cursor
@@ -1583,7 +1632,7 @@ end
 -- Asset bookmarks are files the user uploaded (PDFs, images); they are saved as
 -- they are, and only when KOReader has a provider for the format and the
 -- download_originals setting is on. Empty notes have nothing to show.
-function KaraKo:isReadable(bookmark)
+function Karaoke:isReadable(bookmark)
     local content = bookmark.content
     if not content then return false end
     if content.type == "link" or content.type == "text" then return true end
@@ -1601,7 +1650,7 @@ end
 --
 -- @tparam table bookmark
 -- @treturn bool
-function KaraKo:isIgnored(bookmark)
+function Karaoke:isIgnored(bookmark)
     if not self.ignore_tags or self.ignore_tags == "" then return false end
 
     local ignoring = {}
@@ -1613,7 +1662,7 @@ function KaraKo:isIgnored(bookmark)
     for _, tag in ipairs(bookmark.tags or {}) do
         local name = type(tag) == "table" and (tag.name or tag.label) or tag
         if type(name) == "string" and ignoring[name] then
-            logger.dbg("KaraKo: skipping", bookmark.id, "because it is tagged", name)
+            logger.dbg("Karaoke: skipping", bookmark.id, "because it is tagged", name)
             return true
         end
     end
@@ -1630,18 +1679,18 @@ end
 -- @tparam string asset_id
 -- @tparam number max_bytes
 -- @treturn string|nil Contents, or nil.
-function KaraKo:fetchAsset(api, asset_id, max_bytes)
-    local tmp_path = ffiUtil.joinPath(self.directory, ".karako-asset.tmp")
+function Karaoke:fetchAsset(api, asset_id, max_bytes)
+    local tmp_path = ffiUtil.joinPath(self.directory, ".karaoke-asset.tmp")
 
     local ok = api:downloadAsset(asset_id, tmp_path)
     if not ok then
-        logger.warn("KaraKo: could not download asset", asset_id)
+        logger.warn("Karaoke: could not download asset", asset_id)
         return nil
     end
 
     local size = lfs.attributes(tmp_path, "size") or 0
     if size > max_bytes then
-        logger.warn(string.format("KaraKo: asset %s is %d bytes, over the %d limit - skipping",
+        logger.warn(string.format("Karaoke: asset %s is %d bytes, over the %d limit - skipping",
             asset_id, size, max_bytes))
         os.remove(tmp_path)
         return nil
@@ -1662,7 +1711,7 @@ end
 
 --- Work down the list of possible content sources until one yields something.
 -- @treturn string|nil Article HTML.
-function KaraKo:resolveContent(api, bookmark)
+function Karaoke:resolveContent(api, bookmark)
     local sources = ArticleUtil.contentSources(bookmark, self.prefer_archive)
     local max_bytes = (self.max_archive_mb or 4) * 1024 * 1024
 
@@ -1683,11 +1732,11 @@ function KaraKo:resolveContent(api, bookmark)
         end
 
         if body and body ~= "" then
-            logger.dbg("KaraKo:", bookmark.id, "content from", source.label, #body, "bytes")
+            logger.dbg("Karaoke:", bookmark.id, "content from", source.label, #body, "bytes")
             if source.full_page then
                 -- A whole-page snapshot rather than an extracted article, so it
                 -- arrives with navigation and other page furniture attached.
-                logger.info("KaraKo:", bookmark.id, "using", source.label,
+                logger.info("Karaoke:", bookmark.id, "using", source.label,
                     "- expect page furniture around the article")
             end
             return body
@@ -1707,7 +1756,7 @@ end
 --   title edited in Karakeep since would otherwise leave a second copy behind.
 -- @treturn bool ok
 -- @treturn string|nil Reason when ok is false.
-function KaraKo:downloadArticle(api, bookmark, existing_path)
+function Karaoke:downloadArticle(api, bookmark, existing_path)
     if (bookmark.content or {}).type == "asset" then
         return self:downloadOriginal(api, bookmark, existing_path)
     end
@@ -1725,7 +1774,7 @@ function KaraKo:downloadArticle(api, bookmark, existing_path)
     end
 
     if not body_html or body_html == "" then
-        logger.info("KaraKo: no readable content for", bookmark.id, content.url)
+        logger.info("Karaoke: no readable content for", bookmark.id, content.url)
         return false, _("no readable content")
     end
 
@@ -1746,7 +1795,7 @@ function KaraKo:downloadArticle(api, bookmark, existing_path)
 
     if not ok then
         if err ~= "cancelled" then
-            logger.err("KaraKo: could not build EPUB for", bookmark.id, "at", filepath, "-", tostring(err))
+            logger.err("Karaoke: could not build EPUB for", bookmark.id, "at", filepath, "-", tostring(err))
         end
         return false, tostring(err)
     end
@@ -1771,18 +1820,18 @@ end
 -- @tparam string|nil existing_path Rebuild in place at this path.
 -- @treturn bool ok
 -- @treturn string|nil Human-readable reason when it failed.
-function KaraKo:downloadOriginal(api, bookmark, existing_path)
+function Karaoke:downloadOriginal(api, bookmark, existing_path)
     local content = bookmark.content or {}
     local ext = ArticleUtil.originalExtension(content)
 
     if not ext then
-        logger.info("KaraKo: no KOReader provider for", bookmark.id,
+        logger.info("Karaoke: no KOReader provider for", bookmark.id,
             content.assetType or "?", content.mimeType or "?")
         return false, _("unsupported file type")
     end
 
     if not content.assetId then
-        logger.warn("KaraKo: asset bookmark without an asset id", bookmark.id)
+        logger.warn("Karaoke: asset bookmark without an asset id", bookmark.id)
         return false, _("missing file")
     end
 
@@ -1794,7 +1843,7 @@ function KaraKo:downloadOriginal(api, bookmark, existing_path)
 
     if not api:downloadAsset(content.assetId, tmp_path) then
         os.remove(tmp_path)
-        logger.err("KaraKo: could not download the original file for", bookmark.id)
+        logger.err("Karaoke: could not download the original file for", bookmark.id)
         return false, _("download failed")
     end
 
@@ -1808,18 +1857,18 @@ function KaraKo:downloadOriginal(api, bookmark, existing_path)
 
     if size > max_bytes then
         os.remove(tmp_path)
-        logger.warn("KaraKo: original for", bookmark.id, "is", size, "bytes, over the limit - skipping")
+        logger.warn("Karaoke: original for", bookmark.id, "is", size, "bytes, over the limit - skipping")
         return false, T(_("larger than the %1 MB limit"), self.max_original_mb)
     end
 
     local renamed, err = os.rename(tmp_path, filepath)
     if not renamed then
         os.remove(tmp_path)
-        logger.err("KaraKo: could not move", tmp_path, "to", filepath, tostring(err))
+        logger.err("Karaoke: could not move", tmp_path, "to", filepath, tostring(err))
         return false, _("could not save the file")
     end
 
-    logger.info("KaraKo: saved original", bookmark.id, ext, size, "bytes")
+    logger.info("Karaoke: saved original", bookmark.id, ext, size, "bytes")
     return true
 end
 
@@ -1837,7 +1886,7 @@ end
 -- @tparam[opt=true] bool quiet
 -- @treturn number Articles archived.
 -- @treturn number Articles that should have been archived but could not be.
-function KaraKo:uploadStatuses(local_articles, quiet)
+function Karaoke:uploadStatuses(local_articles, quiet)
     if quiet == nil then quiet = true end
 
     local api = self:getApi()
@@ -1903,7 +1952,7 @@ function KaraKo:uploadStatuses(local_articles, quiet)
                 -- Left on the device with its sidecar intact, so the next run
                 -- picks it up again.
                 failed = failed + 1
-                logger.warn("KaraKo: could not archive", id, "- will retry next sync")
+                logger.warn("Karaoke: could not archive", id, "- will retry next sync")
             end
         end
     end
@@ -1940,7 +1989,7 @@ end
 -- Only runs when the sync was not capped, because a capped sync cannot tell
 -- "archived elsewhere" apart from "did not fit in this page".
 -- @treturn number
-function KaraKo:processRemoteDeletes(local_articles, remote_ids)
+function Karaoke:processRemoteDeletes(local_articles, remote_ids)
     local count = 0
     for id, path in pairs(local_articles) do
         -- Untouched locally and gone remotely: archived or deleted in Karakeep
@@ -1963,19 +2012,58 @@ end
 --
 -- A LuaSettings file rather than JSON: it is already a dependency, it survives
 -- a partial write without becoming undecodable, and the URLs are plain strings.
-function KaraKo:queueFile()
-    return LuaSettings:open(DataStorage:getSettingsDir() .. "/karako_queue.lua")
+function Karaoke:queueFile()
+    return LuaSettings:open(self:queuePath())
+end
+
+--- Path the queue is read from.
+--
+-- karako_queue.lua is the name this file had before the 0.8.0 rename. It is read
+-- while the current name is absent, because a queued URL is unsent work with no
+-- copy anywhere else: an upgrade that ignored the old file would quietly drop
+-- links added offline, and the user would have no way to tell why.
+--
+-- The fallback retires itself on the first save, which writes the current name;
+-- from then on it exists and wins. Nothing has to be deleted, and because the
+-- choice is per read rather than per session the queue can never end up split
+-- across both files.
+-- @treturn string
+function Karaoke:queuePath()
+    local settings_dir = DataStorage:getSettingsDir()
+    local current = settings_dir .. "/karaoke_queue.lua"
+    local previous = settings_dir .. "/karako_queue.lua"
+
+    if lfs.attributes(current, "mode") ~= "file"
+        and lfs.attributes(previous, "mode") == "file" then
+        if not self.queue_legacy_noted then
+            -- Once, not per read: getQueue() runs several times in a sync.
+            self.queue_legacy_noted = true
+            logger.info("Karaoke: reading the queue left at karako_queue.lua; it moves to karaoke_queue.lua on the next save")
+        end
+        return previous
+    end
+
+    return current
+end
+
+--- Path the queue is written to, always the current name.
+-- Writing back to wherever the read came from would leave an upgraded device
+-- updating its queue under the pre-0.8.0 name for ever, and the file would never
+-- arrive at the name this version -- and any later one -- looks for first.
+-- @treturn string
+function Karaoke:queueWritePath()
+    return DataStorage:getSettingsDir() .. "/karaoke_queue.lua"
 end
 
 --- @treturn table Array of queued URLs.
-function KaraKo:getQueue()
+function Karaoke:getQueue()
     local urls = self:queueFile():readSetting("urls", {})
     return type(urls) == "table" and urls or {}
 end
 
 --- @tparam table urls
-function KaraKo:saveQueue(urls)
-    local queue = self:queueFile()
+function Karaoke:saveQueue(urls)
+    local queue = LuaSettings:open(self:queueWritePath())
     queue:saveSetting("urls", urls)
     queue:flush()
 end
@@ -1983,7 +2071,7 @@ end
 --- Queue a URL for the next sync, ignoring duplicates.
 -- @tparam string url
 -- @treturn bool Whether it was added.
-function KaraKo:queueArticle(url)
+function Karaoke:queueArticle(url)
     local urls = self:getQueue()
     for _, existing in ipairs(urls) do
         if existing == url then return false end
@@ -1996,7 +2084,7 @@ end
 --- Send the queued URLs, keeping the ones that fail so nothing is lost.
 -- @treturn number Sent.
 -- @treturn number Still queued.
-function KaraKo:uploadQueue(quiet)
+function Karaoke:uploadQueue(quiet)
     local urls = self:getQueue()
     if #urls == 0 then return 0, 0 end
 
@@ -2016,7 +2104,7 @@ function KaraKo:uploadQueue(quiet)
         self:saveQueue(remaining)
     end
 
-    logger.info("KaraKo: queued articles:", sent, "sent,", #remaining, "left")
+    logger.info("Karaoke: queued articles:", sent, "sent,", #remaining, "left")
 
     if not quiet then
         UIManager:show(InfoMessage:new{
@@ -2036,7 +2124,7 @@ end
 -- with nothing when it was not, in which case there is something to type.
 --
 -- @tparam string|nil article_url
-function KaraKo:onAddKarakoArticle(article_url)
+function Karaoke:onAddKaraokeArticle(article_url)
     if not article_url or article_url == "" then
         return self:promptForArticleUrl()
     end
@@ -2075,12 +2163,12 @@ function KaraKo:onAddKarakoArticle(article_url)
 end
 
 --- Ask for a URL, then add it.
-function KaraKo:promptForArticleUrl()
+function Karaoke:promptForArticleUrl()
     local InputDialog = require("ui/widget/inputdialog")
 
     local dialog
     dialog = InputDialog:new{
-        title = _("Add an article to KaraKo"),
+        title = _("Add an article to Karaoke"),
         description = _("Paste a link. It is saved to Karakeep, and downloaded on the next sync."),
         input = "",
         buttons = {
@@ -2096,7 +2184,7 @@ function KaraKo:promptForArticleUrl()
                         local url = dialog:getInputText()
                         UIManager:close(dialog)
                         if url and url ~= "" then
-                            self:onAddKarakoArticle(url)
+                            self:onAddKaraokeArticle(url)
                         end
                     end,
                 },
@@ -2110,7 +2198,7 @@ function KaraKo:promptForArticleUrl()
 end
 
 --- Dispatcher handler for the upload-queue action.
-function KaraKo:onUploadKarakoQueue()
+function Karaoke:onUploadKaraokeQueue()
     if not self:isReady() then return true end
 
     NetworkMgr:runWhenOnline(function()
@@ -2124,7 +2212,7 @@ end
 -- Events
 --------------------------------------------------------------------------------
 
-function KaraKo:onGoToKarakoDirectory()
+function Karaoke:onGoToKaraokeDirectory()
     if not self.directory then
         UIManager:show(InfoMessage:new{ text = _("No download folder is configured yet.") })
         return true
@@ -2143,4 +2231,4 @@ function KaraKo:onGoToKarakoDirectory()
     return true
 end
 
-return KaraKo
+return Karaoke

@@ -7,4 +7,7 @@
 
 # Release artefacts
 build/
+karaoke.koplugin-v*.zip
+# Built by releases before the 0.8.0 rename; kept so a stale local copy stays
+# out of `git status`.
 karako.koplugin-v*.zip

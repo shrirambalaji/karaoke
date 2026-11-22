@@ -7,7 +7,7 @@ only thing the two representations share is the highlighted text, so matching is
 done on text and is necessarily best-effort — see findTextOffsets() in
 articleutil.lua for the caveats.
 
-@module koplugin.karako.highlights
+@module koplugin.karaoke.highlights
 ]]
 
 local DocSettings = require("docsettings")
@@ -55,7 +55,7 @@ function Highlights.collect(path, doc_settings)
         -- the old shape, which is not read here -- but say so, rather than
         -- reporting an annotated document as having no highlights at all.
         if doc_settings:readSetting("highlight") ~= nil then
-            logger.warn("KaraKo:", path,
+            logger.warn("Karaoke:", path,
                 "holds pre-2024 'highlight' sidecar data, which this plugin does not read;",
                 "sending highlights needs KOReader 2024.04 or newer")
         end
@@ -114,7 +114,7 @@ function Highlights.push(api, bookmark_id, path, doc_settings)
 
     local existing = fetchExisting(api, bookmark_id)
     if not existing then
-        logger.warn("KaraKo: cannot read existing highlights for", bookmark_id, "- skipping push")
+        logger.warn("Karaoke: cannot read existing highlights for", bookmark_id, "- skipping push")
         return 0, 0
     end
 
@@ -174,7 +174,7 @@ function Highlights.push(api, bookmark_id, path, doc_settings)
                 created = created + 1
                 existing[highlight.text] = true
             else
-                logger.warn("KaraKo: failed to create highlight for", bookmark_id)
+                logger.warn("Karaoke: failed to create highlight for", bookmark_id)
             end
         end
     end

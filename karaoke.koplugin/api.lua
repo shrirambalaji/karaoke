@@ -6,7 +6,7 @@ readable content and assets, and pushing read status, tags and highlights back.
 
 See https://docs.karakeep.app/api/karakeep-api/ for the full API.
 
-@module koplugin.karako.api
+@module koplugin.karaoke.api
 ]]
 
 local JSON = require("json")
@@ -94,7 +94,7 @@ function KarakeepApi:call(method, path, opts)
         -- This sleep blocks the UI thread, which is why the fallback backoff is
         -- short and the server's own hint is clamped in retryAfterSeconds().
         local delay = retry_after or 2 ^ attempt
-        logger.dbg("KaraKoApi: retrying", method, path, "in", delay, "s after", result, code)
+        logger.dbg("KaraokeApi: retrying", method, path, "in", delay, "s after", result, code)
         socket.sleep(delay)
     end
 
@@ -136,7 +136,7 @@ function KarakeepApi:_request(method, url, body_json, filepath, quiet)
     if filepath then
         sink_file = io.open(filepath, "w")
         if not sink_file then
-            logger.err("KaraKoApi: cannot open", filepath, "for writing")
+            logger.err("KaraokeApi: cannot open", filepath, "for writing")
             return false, "io_error"
         end
         request.sink = ltn12.sink.file(sink_file)
@@ -146,7 +146,7 @@ function KarakeepApi:_request(method, url, body_json, filepath, quiet)
         socketutil:set_timeout(self.block_timeout, self.total_timeout)
     end
 
-    logger.dbg("KaraKoApi:", method, url)
+    logger.dbg("KaraokeApi:", method, url)
 
     local code, resp_headers, status = socket.skip(1, http.request(request))
     socketutil:reset_timeout()
@@ -154,7 +154,7 @@ function KarakeepApi:_request(method, url, body_json, filepath, quiet)
     if resp_headers == nil then
         -- ltn12.sink.file closes the handle itself, so only clean up the file.
         if filepath then os.remove(filepath) end
-        logger.err("KaraKoApi: network error", status or code, url)
+        logger.err("KaraokeApi: network error", status or code, url)
         return false, "network_error"
     end
 
@@ -176,14 +176,14 @@ function KarakeepApi:_request(method, url, body_json, filepath, quiet)
             return true, ArticleUtil.stripJsonNulls(decoded)
         end
 
-        logger.err("KaraKoApi: response was not valid JSON:", content:sub(1, 200))
+        logger.err("KaraokeApi: response was not valid JSON:", content:sub(1, 200))
         return false, "json_error", code
     end
 
     if filepath then os.remove(filepath) end
 
     if not quiet then
-        logger.err("KaraKoApi: HTTP", code, status, url)
+        logger.err("KaraokeApi: HTTP", code, status, url)
     end
 
     return false, "http_error", code, retryAfterSeconds(resp_headers)

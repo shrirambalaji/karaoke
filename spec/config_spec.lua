@@ -114,7 +114,7 @@ end)
 
 describe("Config.read", function()
     it("returns nil for a file that is not there", function()
-        local values = Config.read("/nonexistent/karako.conf")
+        local values = Config.read("/nonexistent/karaoke.conf")
         assertNil(values)
     end)
 

@@ -4,7 +4,7 @@ Pure helpers for the Karakeep plugin.
 This module deliberately has no KOReader dependencies so that it can be
 exercised by the specs in `spec/` with a plain Lua 5.1 interpreter.
 
-@module koplugin.karako.articleutil
+@module koplugin.karaoke.articleutil
 ]]
 
 local ArticleUtil = {}
@@ -21,6 +21,13 @@ local ArticleUtil = {}
 -- Names written by earlier versions still lead with it. Since the marker is
 -- looked for anywhere in the name, both forms read back the same and no
 -- existing download is orphaned or fetched again.
+--
+-- The marker is a filename wire format and deliberately does not follow the
+-- plugin's name: "kk" is Karakeep's, and the value is baked into the name of
+-- every article already sitting on a device. Changing it to match a rename
+-- would orphan all of them -- the plugin would stop recognising its own
+-- downloads, fetch everything again, and never archive the bookmarks behind
+-- the copies it had just abandoned.
 ArticleUtil.ID_OPEN = "[kk-id_"
 ArticleUtil.ID_CLOSE = "]"
 
@@ -812,7 +819,7 @@ end
 -- and booleans can be encoded; anything else is dropped rather than run through
 -- tostring(), which would put a literal "table: 0x55f3…" on the wire and fail in
 -- a thoroughly baffling way. Callers that care -- pagination, in particular --
--- must notice the value went missing; see KaraKo:fetchBookmarks().
+-- must notice the value went missing; see Karaoke:fetchBookmarks().
 --
 -- @tparam table params
 -- @treturn string Empty string, or "?a=1&b=2".
