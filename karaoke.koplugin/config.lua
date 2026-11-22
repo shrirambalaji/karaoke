@@ -31,6 +31,7 @@ Config.SCHEMA = {
     archive_directory = "string",
     archive_tag = "string",
     ignore_tags = "string",
+    date_folders = "string",
     sync_scope = "string",
     scope_id = "string",
     scope_name = "string",
@@ -46,6 +47,7 @@ Config.SCHEMA = {
     download_covers = "boolean",
     download_originals = "boolean",
     only_favourited = "boolean",
+    lists_as_folders = "boolean",
     prefer_archive = "boolean",
     archive_finished = "boolean",
     archive_read = "boolean",
@@ -166,6 +168,10 @@ function Config.template()
         "# download_covers   = true",
         "# sync_highlights   = true",
         "# archive_tag       = read-on-kobo",
+        "",
+        "# Mirror Karakeep lists as folders, and optionally group them by date.",
+        "# lists_as_folders = true",
+        "# date_folders     = all            # or: none, or list names, comma-separated",
         "",
     }, "\n")
 end

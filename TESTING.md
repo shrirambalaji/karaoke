@@ -224,7 +224,17 @@ these were only linted, reviewed against KOReader v2026.07.1's API, and built.
    limit, and the device should not have briefly written the whole file.
 11. **An archive folder inside the download folder.** Finish an article, sync
    again, and confirm it is not archived a second time.
-12. **A PDF with highlights**: the sync summary should say the highlights were
+12. **Folders from lists**, with the owner's real tree (`Learning` with four
+    children, one bookmark in several lists). Check the deepest manual list wins,
+    that a smart-list bookmark follows its smart list, that a bookmark in no list
+    stays at the top, and that a second sync downloads nothing again.
+13. **Date folders** with `date_folders = all`, and with a list name; confirm the
+    date comes from `createdAt` and stays put on later syncs.
+14. **Cost when folders are on**: watch the log line `Karaoke: folders: placed X
+    of Y pending bookmark(s) using Z list request(s)`. With nothing new, Z should
+    be 0.
+
+15. **A PDF with highlights**: the sync summary should say the highlights were
    not sent, rather than staying silent.
 
 7. **`ignore_tags`** with a tag containing a space, which is the case the

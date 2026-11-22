@@ -1011,4 +1011,140 @@ describe("samePath", function()
     end)
 end)
 
+
+-- Lists as folders. The names here are the real shape of the owner's Karakeep:
+-- "Learning" with children, and a smart list alongside them.
+local function tree(lists)
+    return ArticleUtil.indexLists(lists)
+end
+
+describe("listChain", function()
+    local lists = {
+        { id = "a", name = "Learning", type = "manual" },
+        { id = "b", name = "Rust", type = "manual", parentId = "a" },
+        { id = "c", name = "Deep", type = "manual", parentId = "b" },
+    }
+    local by_id = tree(lists)
+
+    it("walks parentId up to the root, root first", function()
+        local chain = ArticleUtil.listChain(lists[3], by_id)
+        assertEqual(#chain, 3)
+        assertEqual(chain[1].name, "Learning")
+        assertEqual(chain[3].name, "Deep")
+    end)
+
+    it("returns a single-element chain for a top-level list", function()
+        assertEqual(#ArticleUtil.listChain(lists[1], by_id), 1)
+    end)
+
+    it("gives up on a cycle instead of looping for ever", function()
+        local cyclic = tree({
+            { id = "x", name = "X", parentId = "y" },
+            { id = "y", name = "Y", parentId = "x" },
+        })
+        assertNil(ArticleUtil.listChain({ id = "x", name = "X", parentId = "y" }, cyclic))
+    end)
+
+    it("gives up when a parent is missing from the response", function()
+        assertNil(ArticleUtil.listChain({ id = "z", name = "Z", parentId = "gone" }, by_id))
+    end)
+end)
+
+describe("folderForChain", function()
+    local function chain_of(...)
+        local out = {}
+        for _, name in ipairs({ ... }) do table.insert(out, { name = name }) end
+        return out
+    end
+
+    it("keeps the nesting, sanitising each segment on its own", function()
+        -- safeTitle() on the whole path would replace "/" and produce
+        -- "Learning_Replication & consistency", destroying the nesting.
+        assertEqual(ArticleUtil.folderForChain(chain_of("Learning", "Replication & consistency")),
+            "Learning/Replication & consistency")
+    end)
+
+    it("replaces characters FAT cannot hold, per segment", function()
+        assertEqual(ArticleUtil.folderForChain(chain_of("A/B", 'C:D*?')), "A_B/C_D__")
+    end)
+
+    it("drops empty segments and dot-dot", function()
+        assertEqual(ArticleUtil.folderForChain(chain_of("Learning", "", "  ", "..", "Rust")),
+            "Learning/Rust")
+    end)
+
+    it("strips a trailing dot, which FAT cannot represent", function()
+        assertEqual(ArticleUtil.folderForChain(chain_of("Rust...")), "Rust")
+    end)
+
+    it("returns nil when nothing usable is left", function()
+        assertNil(ArticleUtil.folderForChain(chain_of("", "  ")))
+        assertNil(ArticleUtil.folderForChain(nil))
+    end)
+end)
+
+describe("chooseList", function()
+    local lists = {
+        { id = "m-root", name = "Learning", type = "manual" },
+        { id = "m-deep", name = "Rust", type = "manual", parentId = "m-root" },
+        { id = "s-root", name = "Morning briefs", type = "smart" },
+    }
+    local by_id = tree(lists)
+
+    it("prefers a manual list over a smart one, however deep", function()
+        local list = ArticleUtil.chooseList({ "s-root", "m-root" }, by_id)
+        assertEqual(list.id, "m-root")
+    end)
+
+    it("prefers the deepest manual list", function()
+        local list = ArticleUtil.chooseList({ "m-root", "m-deep" }, by_id)
+        assertEqual(list.id, "m-deep")
+    end)
+
+    it("breaks a tie by name, then id, so the answer cannot flip between syncs", function()
+        local ties = tree({
+            { id = "2", name = "Beta", type = "manual" },
+            { id = "1", name = "Alpha", type = "manual" },
+        })
+        assertEqual(ArticleUtil.chooseList({ "2", "1" }, ties).id, "1")
+        assertEqual(ArticleUtil.chooseList({ "1", "2" }, ties).id, "1")
+    end)
+
+    it("ignores lists that are not in the tree", function()
+        assertNil(ArticleUtil.chooseList({ "nope" }, by_id))
+    end)
+end)
+
+describe("dateSegment", function()
+    it("reads the day out of createdAt", function()
+        assertEqual(ArticleUtil.dateSegment({ createdAt = "2026-11-23T08:15:00.000Z" }), "2026-11-23")
+    end)
+
+    it("falls back to firstCreatedAt, then gives up", function()
+        assertEqual(ArticleUtil.dateSegment({ firstCreatedAt = "2025-01-02T00:00:00Z" }), "2025-01-02")
+        assertNil(ArticleUtil.dateSegment({ createdAt = "not a date" }))
+        assertNil(ArticleUtil.dateSegment({}))
+    end)
+end)
+
+describe("wantsDateFolder", function()
+    local list = { name = "Morning briefs" }
+
+    it("is off for an empty or 'none' setting", function()
+        assertTrue(not ArticleUtil.wantsDateFolder("", list))
+        assertTrue(not ArticleUtil.wantsDateFolder("none", list))
+        assertTrue(not ArticleUtil.wantsDateFolder(nil, list))
+    end)
+
+    it("covers everything for 'all'", function()
+        assertTrue(ArticleUtil.wantsDateFolder("all", list))
+        assertTrue(ArticleUtil.wantsDateFolder("all", nil))
+    end)
+
+    it("matches named lists case-insensitively, ignoring spaces", function()
+        assertTrue(ArticleUtil.wantsDateFolder(" Morning briefs , Daily", list))
+        assertTrue(not ArticleUtil.wantsDateFolder("Daily", list))
+    end)
+end)
+
 return Runner

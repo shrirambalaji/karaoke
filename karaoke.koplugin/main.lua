@@ -354,6 +354,11 @@ function Karaoke:loadSettings()
     self.only_favourited = self.settings:readSetting("only_favourited", false)
     self.ignore_tags = self.settings:readSetting("ignore_tags", "")
 
+    -- Mirror Karakeep lists as folders under the download folder, and optionally
+    -- group each one by the bookmark's creation date.
+    self.lists_as_folders = self.settings:readSetting("lists_as_folders", false)
+    self.date_folders = self.settings:readSetting("date_folders", "")
+
     self.archive_finished = self.settings:readSetting("archive_finished", true)
     self.archive_read = self.settings:readSetting("archive_read", true)
     self.archive_abandoned = self.settings:readSetting("archive_abandoned", false)
@@ -389,6 +394,8 @@ function Karaoke:onFlushSettings()
         self.settings:saveSetting("max_original_mb", self.max_original_mb)
         self.settings:saveSetting("only_favourited", self.only_favourited)
         self.settings:saveSetting("ignore_tags", self.ignore_tags)
+        self.settings:saveSetting("lists_as_folders", self.lists_as_folders)
+        self.settings:saveSetting("date_folders", self.date_folders)
         self.settings:saveSetting("archive_finished", self.archive_finished)
         self.settings:saveSetting("archive_read", self.archive_read)
         self.settings:saveSetting("archive_abandoned", self.archive_abandoned)
@@ -583,7 +590,32 @@ Articles carrying any of these tags are not downloaded. Separate them with comma
             keep_menu_open = true,
             callback = function(touchmenu_instance) self:setDownloadDirectory(touchmenu_instance) end,
         },
+                {
+            text = _("Folders from lists"),
+            help_text = _([[
+            Writes each article into a folder named after the Karakeep list it is in, so "Learning" and its children become Learning/, Learning/Rust/ and so on. A bookmark in several lists goes to the deepest manual list it is in; only a bookmark in no manual list follows a smart one. Bookmarks in no list stay in the download folder.
+            
+            Articles already on the device keep the folder they have, so turning this on, or renaming a list, never moves or re-downloads anything. Off by default: with it off a sync makes no list requests at all.]]),
+            checked_func = function() return self.lists_as_folders end,
+            callback = function() self.lists_as_folders = not self.lists_as_folders end,
+        },
         {
+            text_func = function()
+                local setting = self.date_folders
+                if setting == "" or setting:lower() == "none" then
+                    return _("Date folders: off")
+                end
+                return T(_("Date folders: %1"), setting)
+            end,
+            help_text = _([[
+            Adds a folder named after each bookmark's creation date, e.g. Morning briefs/2026-11-23/.
+            
+            Enter "all" for every list, or list names separated by commas. The date is the day the bookmark was created, and does not change later.]]),
+            enabled_func = function() return self.lists_as_folders end,
+            keep_menu_open = true,
+            callback = function(touchmenu_instance) self:setDateFolders(touchmenu_instance) end,
+        },
+{
             text = _("Embed images"),
             help_text = _("Images in the article itself. Turning this off makes articles build faster and smaller."),
             checked_func = function() return self.download_images end,
@@ -1121,6 +1153,36 @@ function Karaoke:setIgnoreTags(touchmenu_instance)
     dialog:onShowKeyboard()
 end
 
+--- "all", "none", or a comma-separated list of list names.
+function Karaoke:setDateFolders(touchmenu_instance)
+    local InputDialog = require("ui/widget/inputdialog")
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Date folders"),
+        description = _([[Enter "all" for every list, "none" to stop, or list names separated by commas.]]),
+        input = self.date_folders,
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function() UIManager:close(dialog) end,
+                },
+                {
+                    text = _("Save"),
+                    callback = function()
+                        self.date_folders = util.trim(dialog:getInputText())
+                        UIManager:close(dialog)
+                        if touchmenu_instance then touchmenu_instance:updateItems() end
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
 function Karaoke:setMaxOriginalMb(touchmenu_instance)
     UIManager:show(SpinWidget:new{
         title_text = _("Largest original to download"),
@@ -1164,6 +1226,13 @@ end
 -- terminate at all.
 local MAX_SCAN_DEPTH = 6
 
+-- 100 is the largest page the API serves. The page cap keeps a pathological
+-- account (hundreds of lists, tens of thousands of bookmarks) from turning one
+-- sync into hundreds of requests; whatever is left over simply lands in the
+-- download folder, and is picked up correctly on a later sync.
+local MEMBERSHIP_PAGE_SIZE = 100
+local MAX_MEMBERSHIP_PAGES = 60
+
 --- Map bookmark ID to local path for every downloaded article.
 -- @tparam[opt] string dir
 -- @tparam[opt] table map
@@ -1204,6 +1273,161 @@ function Karaoke:getLocalArticles(dir, map, depth)
     end
 
     return map
+end
+
+--- Work out which folder each bookmark that still needs downloading belongs in.
+--
+-- Returns nil -- meaning "write straight into the download folder", exactly as
+-- before -- unless lists-as-folders is on. The additional cost is kept small on
+-- purpose, because a folder layout must not make syncing slower:
+--
+--   * one GET /lists, whatever the number of bookmarks or lists;
+--   * per-list requests only for bookmarks that still need a folder (an existing
+--     file keeps the folder it has, so nothing is ever moved or re-downloaded);
+--   * those requests ask for no content, since the sync walk fetches content
+--     once and asking again per list would multiply the largest part of the
+--     response by the number of lists;
+--   * lists are visited best-first -- manual before smart, deepest first -- so
+--     the first list containing a bookmark is the one chooseList() would pick,
+--     and the walk stops the moment every pending bookmark has a folder.
+--
+-- A sync with nothing new therefore costs one extra request; a sync with folders
+-- turned off costs none. If the list walk fails, the sync carries on flat rather
+-- than failing: folders are decoration, the articles are the point.
+--
+-- @tparam table api
+-- @tparam table remote Bookmarks the server returned for this sync.
+-- @tparam table local_articles Map of bookmark ID to local path.
+-- @treturn table|nil Map of bookmark ID to relative folder, or nil.
+function Karaoke:resolveFolders(api, remote, local_articles)
+    if not self.lists_as_folders then return nil end
+
+    local pending, remaining = {}, 0
+    for _, bookmark in ipairs(remote or {}) do
+        if not local_articles[bookmark.id] then
+            pending[bookmark.id] = bookmark
+            remaining = remaining + 1
+        end
+    end
+
+    if remaining == 0 then return {} end
+
+    local ok, lists = api:getLists()
+    if not ok then
+        logger.warn("Karaoke: could not fetch lists for folders -", tostring(lists))
+        return nil
+    end
+
+    local by_id = ArticleUtil.indexLists(lists)
+
+    -- Pre-sorted into the order chooseList() ranks: manual first, then deepest,
+    -- then name, then id. Taking the first list that contains a bookmark is then
+    -- the same answer, without holding every membership in memory.
+    local ordered = {}
+    for _, list in ipairs(lists or {}) do
+        local chain = ArticleUtil.listChain(list, by_id)
+        if chain then
+            table.insert(ordered, {
+                list = list,
+                chain = chain,
+                rank = {
+                    list.type == "smart" and 1 or 0,
+                    -#chain,
+                    (list.name or ""):lower(),
+                    tostring(list.id),
+                },
+            })
+        end
+    end
+
+    table.sort(ordered, function(a, b)
+        for i = 1, 4 do
+            if a.rank[i] ~= b.rank[i] then return a.rank[i] < b.rank[i] end
+        end
+        return false
+    end)
+
+    local chosen = {}
+    local pages, capped = 0, false
+
+    for _, candidate in ipairs(ordered) do
+        if remaining == 0 then break end
+
+        local cursor = nil
+        repeat
+            if pages >= MAX_MEMBERSHIP_PAGES then
+                capped = true
+                break
+            end
+
+            pages = pages + 1
+            local page_ok, page = api:getListBookmarksPage(candidate.list.id, {
+                limit = MEMBERSHIP_PAGE_SIZE,
+                cursor = cursor,
+            })
+
+            if not page_ok then
+                -- One unreadable list must not abort the layout of the rest.
+                logger.warn("Karaoke: could not read list", candidate.list.id, page)
+                break
+            end
+
+            for _, bookmark in ipairs(page.bookmarks or {}) do
+                if pending[bookmark.id] and not chosen[bookmark.id] then
+                    chosen[bookmark.id] = candidate
+                    remaining = remaining - 1
+                end
+            end
+
+            cursor = type(page.nextCursor) == "string" and page.nextCursor or nil
+        until not cursor or remaining == 0
+    end
+
+    if capped then
+        logger.warn("Karaoke: stopped reading lists after", pages,
+            "pages; the rest will be written without a folder")
+    end
+
+    local folders = {}
+    for id, bookmark in pairs(pending) do
+        local candidate = chosen[id]
+        local folder = candidate and ArticleUtil.folderForChain(candidate.chain) or nil
+
+        if ArticleUtil.wantsDateFolder(self.date_folders, candidate and candidate.list or nil) then
+            local date = ArticleUtil.dateSegment(bookmark)
+            folder = date and (folder and (folder .. "/" .. date) or date) or folder
+        end
+
+        if folder then folders[id] = folder end
+    end
+
+    local placed = 0
+    for _ in pairs(folders) do placed = placed + 1 end
+    logger.info("Karaoke: folders: placed", placed, "of", placed + remaining,
+        "pending bookmark(s) using", pages, "list request(s)")
+
+    return folders
+end
+
+--- The absolute folder a bookmark is written into, created on demand.
+--
+-- A folder that cannot be created falls back to the download folder rather than
+-- losing the article.
+--
+-- @tparam string|nil folder Relative folder, e.g. "Learning/Rust".
+-- @treturn string Absolute path.
+function Karaoke:folderPath(folder)
+    if not folder or folder == "" then return self.directory end
+
+    local path = ffiUtil.joinPath(self.directory, folder)
+    if lfs.attributes(path, "mode") ~= "directory" then
+        util.makePath(path)
+        if lfs.attributes(path, "mode") ~= "directory" then
+            logger.warn("Karaoke: could not create", path, "- writing to the download folder")
+            return self.directory
+        end
+    end
+    return path
 end
 
 --- Rename articles still carrying the leading "[kk-id_…] " marker.
@@ -1599,6 +1823,10 @@ function Karaoke:synchronize(quiet, force_redownload)
         remote_ids[bookmark.id] = true
     end
 
+    -- Only bookmarks that are not already on the device need a folder: an
+    -- existing file keeps the one it has, so nothing is ever moved.
+    local folders = self:resolveFolders(api, remote, local_articles)
+
     local downloaded, failed, skipped = 0, 0, 0
     local cancelled = false
     local first_failure
@@ -1626,7 +1854,8 @@ function Karaoke:synchronize(quiet, force_redownload)
                 break
             end
 
-            local built, reason = self:downloadArticle(api, bookmark, existing)
+            local built, reason = self:downloadArticle(api, bookmark, existing,
+                folders and folders[bookmark.id] or nil)
             if built then
                 downloaded = downloaded + 1
             elseif reason == "cancelled" then
@@ -2016,9 +2245,9 @@ end
 --   title edited in Karakeep since would otherwise leave a second copy behind.
 -- @treturn bool ok
 -- @treturn string|nil Reason when ok is false.
-function Karaoke:downloadArticle(api, bookmark, existing_path)
+function Karaoke:downloadArticle(api, bookmark, existing_path, folder)
     if (bookmark.content or {}).type == "asset" then
-        return self:downloadOriginal(api, bookmark, existing_path)
+        return self:downloadOriginal(api, bookmark, existing_path, folder)
     end
 
     local Trapper = require("ui/trapper")
@@ -2038,8 +2267,11 @@ function Karaoke:downloadArticle(api, bookmark, existing_path)
         return false, _("no readable content")
     end
 
+    -- An existing file keeps its folder: moving articles around on every sync
+    -- would strand sidecars and confuse the reader for no gain.
     local filepath = existing_path
-        or ffiUtil.joinPath(self.directory, ArticleUtil.buildFilename(bookmark.id, title))
+        or ffiUtil.joinPath(self:folderPath(folder),
+            ArticleUtil.buildFilename(bookmark.id, title))
 
     local ok, err = EpubBuilder.build(bookmark, filepath, {
         body_html = body_html,
@@ -2089,7 +2321,7 @@ end
 -- @tparam string|nil existing_path Rebuild in place at this path.
 -- @treturn bool ok
 -- @treturn string|nil Human-readable reason when it failed.
-function Karaoke:downloadOriginal(api, bookmark, existing_path)
+function Karaoke:downloadOriginal(api, bookmark, existing_path, folder)
     local content = bookmark.content or {}
     local ext = ArticleUtil.originalExtension(content)
 
@@ -2105,7 +2337,7 @@ function Karaoke:downloadOriginal(api, bookmark, existing_path)
     end
 
     local filepath = existing_path
-        or ffiUtil.joinPath(self.directory,
+        or ffiUtil.joinPath(self:folderPath(folder),
             ArticleUtil.buildFilename(bookmark.id, ArticleUtil.originalTitle(bookmark), ext))
 
     local tmp_path = filepath .. ".part"

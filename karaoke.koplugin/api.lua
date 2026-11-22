@@ -118,6 +118,11 @@ function KarakeepApi:_request(method, url, body_json, filepath, quiet, max_bytes
     local headers = {
         ["Authorization"] = "Bearer " .. self.api_token,
         ["Accept"] = "application/json, */*",
+        -- luasocket sends no User-Agent of its own, and a self-hosted Karakeep
+        -- behind Cloudflare can answer such a request with 403 "Error 1010"
+        -- (blocked browser signature), which then looks exactly like a scopes
+        -- problem. Naming ourselves keeps that diagnosis out of the way.
+        ["User-Agent"] = "Karaoke-KOReader-plugin/1",
     }
 
     local request = {
@@ -342,6 +347,41 @@ function KarakeepApi:getReadableContent(id, format)
     end
 
     return true, table.concat(chunks)
+end
+
+--- All lists, for mapping them onto folders.
+--
+-- One request, whatever the number of bookmarks. Requires the Lists scope.
+-- @treturn bool ok
+-- @treturn table|string Array of lists, or an error code.
+function KarakeepApi:getLists()
+    local ok, result = self:call("GET", "/lists")
+    if not ok then return false, result end
+    -- The response is { lists = { ... } }; an older server returning a bare
+    -- array is accepted too rather than silently yielding nothing.
+    return true, (result and result.lists) or result or {}
+end
+
+--- One page of a list's bookmarks, without their content.
+--
+-- Used only to learn which lists a bookmark is in. `includeContent` is left off
+-- on purpose: the content is fetched once, in the main sync walk, and asking for
+-- it here as well would multiply the largest part of the response by the number
+-- of lists.
+--
+-- @tparam string list_id
+-- @tparam table opts limit, cursor
+-- @treturn bool ok
+-- @treturn table|string { bookmarks, nextCursor } or an error code.
+function KarakeepApi:getListBookmarksPage(list_id, opts)
+    opts = opts or {}
+    return self:call("GET", "/lists/" .. list_id .. "/bookmarks", {
+        query = {
+            limit = opts.limit,
+            cursor = opts.cursor,
+            sortOrder = "desc",
+        },
+    })
 end
 
 --- Download an asset to a local file.

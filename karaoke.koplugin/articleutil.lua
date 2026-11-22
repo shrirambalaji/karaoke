@@ -140,6 +140,167 @@ function ArticleUtil.samePath(a, b)
     return a ~= "" and b ~= "" and normalise(a) == normalise(b)
 end
 
+--- Index a `GET /lists` response by id.
+--
+-- @tparam table|nil lists Array of Karakeep lists.
+-- @treturn table Map of id to list.
+function ArticleUtil.indexLists(lists)
+    local by_id = {}
+    for _, list in ipairs(lists or {}) do
+        if type(list) == "table" and list.id then by_id[list.id] = list end
+    end
+    return by_id
+end
+
+--- Walk a list's parentId chain up to the top.
+--
+-- @tparam table list A list from `GET /lists`.
+-- @tparam table by_id Map of id to list.
+-- @treturn table|nil Array of lists, root first, ending with `list`. nil when the
+--   chain is broken (a parent that is not in the response) or contains a cycle.
+function ArticleUtil.listChain(list, by_id)
+    if type(list) ~= "table" or type(by_id) ~= "table" then return nil end
+
+    local chain, seen, current = {}, {}, list
+
+    while current do
+        if seen[current.id] then return nil end -- cycle: never loop forever
+        seen[current.id] = true
+        table.insert(chain, 1, current)
+
+        local parent_id = current.parentId
+        if not parent_id then break end
+
+        current = by_id[parent_id]
+        -- A parent the response does not include (deleted, or outside the
+        -- caller's access) leaves the path unknowable, so the bookmark stays in
+        -- the root rather than landing in a folder that is only half its name.
+        if not current then return nil end
+    end
+
+    return chain
+end
+
+--- Turn a list chain into a relative folder path.
+--
+-- Each segment goes through safeTitle() on its own: passing "Learning/Replication"
+-- through safeTitle() as a whole would replace the slash and collapse the
+-- nesting into one folder called "Learning_Replication".
+--
+-- Segments that clean down to nothing, or to "."/"..", are dropped rather than
+-- written: on FAT they are either meaningless or actively dangerous.
+--
+-- @tparam table chain Array of lists, root first.
+-- @treturn string|nil Relative path with "/" separators, or nil when nothing is left.
+function ArticleUtil.folderForChain(chain)
+    if type(chain) ~= "table" then return nil end
+
+    local segments = {}
+    for _, list in ipairs(chain) do
+        -- Only a list with no usable name at all is skipped; safeTitle() turns an
+        -- empty name into "Untitled", which is not a name anyone chose.
+        local raw = list.name or ""
+        -- Rejected before safeTitle(), not after: safeTitle("..") trims the
+        -- trailing dots down to nothing and then answers "Untitled", which would
+        -- have created a folder by that name for a list called "..".
+        if raw:match("%S") and not raw:match("^[%.%s]*$") then
+            local cleaned = ArticleUtil.safeTitle(raw, 60)
+            cleaned = cleaned:gsub("%.+$", ""):gsub("^%s+", "") -- FAT: no trailing dot
+
+            if cleaned ~= "" and cleaned ~= "." and cleaned ~= ".." then
+                table.insert(segments, cleaned)
+            end
+        end
+    end
+
+    if #segments == 0 then return nil end
+    return table.concat(segments, "/")
+end
+
+--- Decide which list a bookmark belongs to, out of the ones it is in.
+--
+-- Manual lists beat smart ones first, deliberately: a smart list's membership is
+-- computed from a query, so letting it win would re-file a bookmark the user had
+-- put somewhere by hand. Within a class the deepest wins (so "Learning/Rust"
+-- beats "Learning"), then the alphabetically first name, then the id -- a fixed
+-- order, because two syncs that disagreed would move the file back and forth.
+--
+-- @tparam table list_ids Array of list ids the bookmark is in.
+-- @tparam table by_id Map of id to list.
+-- @treturn table|nil The chosen list.
+-- @treturn table|nil Its chain.
+function ArticleUtil.chooseList(list_ids, by_id)
+    local best_list, best_chain, best_rank
+
+    for _, id in ipairs(list_ids or {}) do
+        local list = by_id[id]
+        local chain = list and ArticleUtil.listChain(list, by_id)
+
+        if list and chain then
+            local rank = {
+                list.type == "smart" and 1 or 0, -- manual first
+                -#chain,                          -- deeper first
+                (list.name or ""):lower(),
+                tostring(list.id),
+            }
+
+            local better = best_rank == nil
+            if not better then
+                for i = 1, 4 do
+                    if rank[i] ~= best_rank[i] then
+                        better = rank[i] < best_rank[i]
+                        break
+                    end
+                end
+            end
+
+            if better then
+                best_list, best_chain, best_rank = list, chain, rank
+            end
+        end
+    end
+
+    return best_list, best_chain
+end
+
+--- The `YYYY-MM-DD` folder segment for a bookmark, from its creation date.
+--
+-- @tparam table bookmark
+-- @treturn string|nil
+function ArticleUtil.dateSegment(bookmark)
+    if type(bookmark) ~= "table" then return nil end
+    local stamp = bookmark.createdAt or bookmark.firstCreatedAt
+    if type(stamp) ~= "string" then return nil end
+    local year, month, day = stamp:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)")
+    if not year then return nil end
+    return year .. "-" .. month .. "-" .. day
+end
+
+--- Whether a list's folder should get a date subfolder.
+--
+-- "all" means every list; anything else is a comma-separated list of list
+-- *names*, matched case-insensitively. Names rather than paths so that a
+-- renamed parent does not silently switch the behaviour off.
+--
+-- @tparam string|nil setting
+-- @tparam table|nil list The list being placed, or nil for no list at all.
+-- @treturn bool
+function ArticleUtil.wantsDateFolder(setting, list)
+    if type(setting) ~= "string" or setting == "" or setting:lower() == "none" then
+        return false
+    end
+    if setting:lower() == "all" then return true end
+    if not list then return false end
+
+    local name = (list.name or ""):lower()
+    for wanted in (setting .. ","):gmatch("([^,]*),") do
+        -- Lowercase the setting side too: the list name is lowercased above, and
+        -- comparing "Morning briefs" to "morning briefs" never matched.
+        if wanted:match("^%s*(.-)%s*$"):lower() == name then return true end
+    end
+    return false
+end
+
 --- Turn an article title into something safe to write to a Kobo's FAT32 partition.
 -- @tparam string|nil title
 -- @tparam[opt=180] number max_len Maximum length in bytes.

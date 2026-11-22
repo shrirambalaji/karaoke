@@ -551,6 +551,53 @@ gesture, under **Settings → Gestures**.
 - Only articles still unarchived in Karakeep come back. Anything archived there
   is out of the sync scope and is left alone.
 
+## Folders from lists
+
+**KaraKo → Downloads → Folders from lists** mirrors your Karakeep list tree onto
+the download folder, so `Learning` and its children become:
+
+```
+Learning/
+  Logs & streaming/
+  Replication & consistency/
+  Rust/
+```
+
+and a bookmark in no list stays at the top. Names are cleaned per segment, the
+way file names are — `Learning/Replication` becomes two folders, never
+`Learning_Replication`.
+
+**A bookmark in several lists** goes to the deepest *manual* list it is in. Smart
+lists come only after manual ones, deliberately: a smart list's membership is
+computed from a query, so letting it win would re-file something you had put
+somewhere by hand. Equal depth is broken by name, then by id, so the choice can
+never flip between syncs and move a file back and forth.
+
+**Nothing is ever moved.** An article already on the device keeps the folder it
+has, which means turning this on, renaming a list or changing the date setting
+only affects what is downloaded next. Old folder names stay until you delete them.
+
+**Date folders** (`date_folders = all`, or a comma-separated list of list names)
+adds the bookmark's creation day: `Morning briefs/2026-11-23/`. The date is fixed
+at creation and never changes, so a date folder is stable once written.
+
+### What it costs
+
+Off by default, and free when off: no list requests at all. On, it stays close to
+the single-walk sync it was built from:
+
+- **one** `GET /lists`, whatever the number of bookmarks or lists;
+- per-list requests **only** for bookmarks that still need a folder, and only
+  when some do — a sync with nothing new costs that one request;
+- those requests carry no content (`includeContent` is not asked for), because
+  the main walk already fetches it once; asking again per list would multiply the
+  heaviest part of the response by the number of lists;
+- lists are visited best-first, so the first list containing a bookmark is its
+  winner, and the walk stops as soon as every pending bookmark is placed.
+
+`GET /bookmarks` does not say which lists a bookmark is in, which is why the
+per-list requests exist at all.
+
 ## How articles are named
 
 Downloads are named `Article Title [kk-id_abc123].epub`. The bracketed marker is
