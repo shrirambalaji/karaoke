@@ -8,11 +8,15 @@
 Read your [Karakeep](https://karakeep.app) articles on a Kobo, via
 [KOReader](https://koreader.rocks).
 
-`karako.koplugin` syncs unread bookmarks onto the device as EPUBs, and pushes
-your read status and highlights back to Karakeep when you are done with them.
+`karako.koplugin` syncs unread bookmarks onto the device as EPUBs, saves uploaded
+PDFs and images as they are, and pushes your read status and highlights back to
+Karakeep when you are done with them.
 
 It is modelled on KOReader's [`wallabag.koplugin`][wallabag], which solves the
-same problem for a different read-it-later service.
+same problem for a different read-it-later service. This fork
+([`shrirambalaji/karaoke`](https://github.com/shrirambalaji/karaoke)) carries
+wallabag's remaining features across, and is the source of truth for the
+releases below.
 
 [wallabag]: https://github.com/koreader/koreader/tree/master/plugins/wallabag.koplugin
 
@@ -20,12 +24,40 @@ same problem for a different read-it-later service.
 
 - Downloads unread bookmarks as EPUBs, built on device from Karakeep's crawled
   article HTML, with images embedded.
-- Syncs everything unarchived, or just one Karakeep list or tag.
+- **Saves uploaded PDFs and images exactly as they are**, rather than trying to
+  rebuild them into an EPUB.
+- Syncs everything unarchived, or just one Karakeep list or tag, or only your
+  favourites.
+- Skips articles carrying any tag you tell it to ignore.
+- **Adds articles to Karakeep from the device**, queueing the link when there is
+  no connection.
 - Archives an article in Karakeep once you finish it, optionally tagging it and
-  deleting the local copy.
-- Sends the highlights you make in KOReader back to Karakeep.
+  deleting the local copy — or moving it to an archive folder instead.
+- Sends the highlights you make in KOReader back to Karakeep, and optionally the
+  review note as tags.
 - Optionally syncs when Wi-Fi connects, without interrupting your reading.
 - Cleans up local copies of articles you archived elsewhere.
+
+## What this fork adds over upstream
+
+Everything `wallabag.koplugin` does that upstream KaraKo did not, plus PDFs:
+
+| Feature | Setting |
+| --- | --- |
+| PDFs and other uploaded originals, saved unchanged | `download_originals`, `max_original_mb` |
+| Only download favourites | `only_favourited` |
+| Ignore articles by tag | `ignore_tags` |
+| Add an article from the reader, with an offline queue | **KaraKo → Add an article** |
+| Move finished articles to an archive folder instead of deleting | `archive_directory` |
+| Delete in Karakeep instead of archiving | `remote_delete_instead_of_archive` |
+| Send the review note as tags | `send_review_as_tags` |
+| Configurable network timeout | `network_timeout` |
+
+The word "originals" is deliberate: an uploaded PDF is never converted, never
+re-fetched through the crawler, and never summarised. It is the bytes the user
+put into Karakeep, written to the device with the same
+`Article Title [kk-id_…]` name an article gets, so read status, archiving and
+local-copy bookkeeping work identically for both.
 
 ## Requirements
 
@@ -359,6 +391,7 @@ rather than implying more than the plugin does.
 | Thing | Direction | On conflict |
 | --- | --- | --- |
 | Article content | Karakeep → device | Re-downloaded only if missing locally |
+| Uploaded originals (PDF, images) | Karakeep → device | Saved as-is; re-downloaded only if missing locally |
 | Finished / read | device → Karakeep | Device wins. Un-archiving in Karakeep while the local copy is finished re-archives it on the next sync |
 | Archived elsewhere | Karakeep → device | Local copy deleted, **but only if you never opened it** |
 | Highlights | device → Karakeep | Create-only, matched by text. See below |

@@ -138,6 +138,82 @@ function ArticleUtil.buildFilename(id, title, ext)
     return ArticleUtil.safeTitle(title, math.min(180, budget)) .. marker .. ext
 end
 
+--- Extensions KOReader can open on a Kobo, keyed by the lowercased form.
+--
+-- An uploaded original outside this list would be downloaded and then be
+-- unopenable, so it is treated as not worth fetching rather than saved as a
+-- file with no provider.
+ArticleUtil.ORIGINAL_EXTENSIONS = {
+    pdf = ".pdf", epub = ".epub", cbz = ".cbz", cbr = ".cbr",
+    txt = ".txt", html = ".html", htm = ".htm",
+    jpg = ".jpg", jpeg = ".jpeg", png = ".png", gif = ".gif",
+    webp = ".webp", bmp = ".bmp", tiff = ".tiff", tif = ".tif",
+}
+
+--- Work out the local extension for an uploaded original.
+--
+-- Karakeep stores the file the user uploaded (a PDF, an image) as an asset.
+-- `assetType` names the family, but "image" does not say which format it is, so
+-- the MIME type and then the file name are tried too. Anything KOReader has no
+-- provider for returns nil.
+--
+-- @tparam table content Karakeep bookmark content table.
+-- @treturn string|nil Extension including the dot, e.g. ".pdf".
+function ArticleUtil.originalExtension(content)
+    if type(content) ~= "table" then return nil end
+
+    local candidates = {}
+
+    if content.assetType == "pdf" then
+        table.insert(candidates, "pdf")
+    end
+
+    if type(content.mimeType) == "string" then
+        local subtype = content.mimeType:match("^%s*[%w.+-]+/([%w.+-]+)")
+        if subtype then table.insert(candidates, subtype) end
+    end
+
+    if type(content.fileName) == "string" then
+        local ext = content.fileName:match("%.([%w]+)$")
+        if ext then table.insert(candidates, ext) end
+    end
+
+    -- "application/octet-stream" and the like fall through to the next
+    -- candidate rather than becoming an extension of their own.
+    for _, ext in ipairs(candidates) do
+        local known = ArticleUtil.ORIGINAL_EXTENSIONS[ext:lower()]
+        if known then return known end
+    end
+
+    return nil
+end
+
+--- Title for an uploaded original.
+--
+-- Assets have no URL to fall back on, and when the file name is all there is it
+-- carries an extension that buildFilename() would then add a second time.
+--
+-- @tparam table bookmark Karakeep bookmark.
+-- @treturn string Never empty.
+function ArticleUtil.originalTitle(bookmark)
+    local content = (type(bookmark) == "table" and bookmark.content) or {}
+
+    local title = bookmark.title
+    if type(title) ~= "string" or title == "" then title = content.title end
+    if type(title) ~= "string" or title == "" then title = content.fileName end
+    if type(title) ~= "string" or title == "" then return "Untitled" end
+
+    -- Only strip a suffix that is actually a document extension: a title like
+    -- "Node.js internals" must keep its ".js".
+    local suffix = title:match("%.([%w]+)$")
+    if suffix and ArticleUtil.ORIGINAL_EXTENSIONS[suffix:lower()] then
+        local stripped = title:gsub("%.[%w]+$", "")
+        if stripped ~= "" then title = stripped end
+    end
+
+    return title
+end
+
 --- Encode a Unicode code point as UTF-8. Lua 5.1 has no utf8 library.
 -- @tparam number cp
 -- @treturn string

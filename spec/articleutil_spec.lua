@@ -683,4 +683,68 @@ describe("normaliseServerUrl", function()
     end)
 end)
 
+
+describe("originalExtension", function()
+    it("recognises an uploaded PDF", function()
+        assertEqual(ArticleUtil.originalExtension({ type = "asset", assetType = "pdf" }), ".pdf")
+    end)
+
+    it("uses the MIME type for an image, since \"image\" is not a format", function()
+        assertEqual(ArticleUtil.originalExtension({
+            type = "asset", assetType = "image", mimeType = "image/png",
+        }), ".png")
+    end)
+
+    it("falls back to the file name", function()
+        assertEqual(ArticleUtil.originalExtension({
+            type = "asset", assetType = "image", fileName = "Scan.JPG",
+        }), ".jpg")
+    end)
+
+    it("prefers the PDF asset type over a misleading MIME type", function()
+        assertEqual(ArticleUtil.originalExtension({
+            type = "asset", assetType = "pdf", mimeType = "application/octet-stream",
+        }), ".pdf")
+    end)
+
+    it("refuses a format KOReader cannot open", function()
+        assertNil(ArticleUtil.originalExtension({
+            type = "asset", assetType = "archive", mimeType = "application/zip", fileName = "x.zip",
+        }))
+    end)
+
+    it("refuses an image with nothing to identify it by", function()
+        assertNil(ArticleUtil.originalExtension({ type = "asset", assetType = "image" }))
+    end)
+
+    it("tolerates a missing content table", function()
+        assertNil(ArticleUtil.originalExtension(nil))
+    end)
+end)
+
+describe("originalTitle", function()
+    it("prefers the bookmark title", function()
+        assertEqual(ArticleUtil.originalTitle{
+            title = "Designing Data-Intensive Applications",
+            content = { type = "asset", fileName = "book.pdf" },
+        }, "Designing Data-Intensive Applications")
+    end)
+
+    it("uses the file name when there is no title", function()
+        assertEqual(ArticleUtil.originalTitle{
+            content = { type = "asset", fileName = "paper.pdf" },
+        }, "paper")
+    end)
+
+    it("does not strip a suffix that is not a document extension", function()
+        -- Stripping every ".xyz" would turn this into "Node".
+        assertEqual(ArticleUtil.originalTitle{ title = "Node.js internals" }, "Node.js internals")
+    end)
+
+    it("never returns an empty title", function()
+        assertEqual(ArticleUtil.originalTitle{ content = { type = "asset" } }, "Untitled")
+        assertEqual(ArticleUtil.originalTitle{ title = "" }, "Untitled")
+    end)
+end)
+
 return Runner
